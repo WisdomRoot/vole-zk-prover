@@ -1,3 +1,8 @@
+# ⚠️ Notice
+
+**Important:** This project depends on the yanked package [**`polynomen`**](https://crates.io/crates/polynomen). Why polynomen was yanked is not clear.
+---
+
 # VOLE in the head aimed for compatability with popular DSLs
 This is an extremely efficient NIZK prover. It is currently doing about 300k constraints per second on consumer hardware on a 254-bit field. There is a tradeoff in that is not succinct. It uses the [Quicksilver](https://eprint.iacr.org/2021/076) proving system with [VOLE-in-the-head](https://eprint.iacr.org/2023/996) for the commitment scheme. It is optimized for the prime 21888242871839275222246405745257275088548364400416034343698204186575808495617 popular modern proving systems. We plan to support more finite fields.
 
