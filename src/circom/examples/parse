@@ -1,0 +1,294 @@
+#!/usr/bin/env python3
+"""
+R1CS Binary Format Parser
+Compiles a .circom file and parses the resulting .r1cs file.
+"""
+import struct
+import sys
+import subprocess
+import os
+import argparse
+
+
+def normalize_coeff(coeff, prime):
+    """Normalizes a coefficient to be in the range [-prime/2, prime/2]."""
+    if coeff > prime // 2:
+        return coeff - prime
+    else:
+        return coeff
+
+
+def factor_leading_sign(coeffs, prime):
+    """Formats a linear combination into a (sign, string) tuple.
+    The sign is factored out from the entire expression to ensure the string
+    representation starts with a positive term.
+    Example: [-v1 + v2] becomes (sign=-1, string="v1 - v2")
+    """
+    if not coeffs:
+        return (1, "0")
+
+    # Determine the sign of the leading term to factor it out.
+    first_coeff = normalize_coeff(coeffs[0][1], prime)
+    sign = 1 if first_coeff >= 0 else -1
+
+    terms = []
+    for i, (var_idx, coeff_val) in enumerate(coeffs):
+        # Apply the factored-out sign to the normalized coefficient.
+        norm_coeff = normalize_coeff(coeff_val, prime) * sign
+
+        if i == 0:
+            if var_idx == 0:
+                if norm_coeff == 1:
+                    terms.append("1")
+                else:
+                    terms.append(f"{norm_coeff}")
+            else:
+                if norm_coeff == 1:
+                    terms.append(f"x{var_idx}")
+                else:
+                    terms.append(f"{norm_coeff}*x{var_idx}")
+        else:
+            if var_idx == 0:
+                if norm_coeff == 1:
+                    terms.append("+ 1")
+                elif norm_coeff == -1:
+                    terms.append("- 1")
+                elif norm_coeff > 0:
+                    terms.append(f"+ {norm_coeff}")
+                else:
+                    terms.append(f"- {-norm_coeff}")
+            else:
+                if norm_coeff == 1:
+                    terms.append(f"+ x{var_idx}")
+                elif norm_coeff == -1:
+                    terms.append(f"- x{var_idx}")
+                elif norm_coeff > 0:
+                    terms.append(f"+ {norm_coeff}*x{var_idx}")
+                else:
+                    terms.append(f"- {-norm_coeff}*x{var_idx}")
+
+    return (sign, " ".join(terms))
+
+
+def parse_r1cs(data):
+    pos = 0
+
+    def read_u32():
+        nonlocal pos
+        val = struct.unpack_from("<I", data, pos)[0]
+        pos += 4
+        return val
+
+    def read_u64():
+        nonlocal pos
+        val = struct.unpack_from("<Q", data, pos)[0]
+        pos += 8
+        return val
+
+    def read_field_element(field_size):
+        nonlocal pos
+        val = int.from_bytes(data[pos : pos + field_size], "little")
+        pos += field_size
+        return val
+
+    print("=== R1CS Binary Format Parser ===\n")
+
+    # Header
+    magic = data[pos : pos + 4]
+    pos += 4
+    print(f"Magic: {magic} ({magic.decode('utf-8')})")
+
+    version = read_u32()
+    print(f"Version: {version}")
+
+    n_sections = read_u32()
+    print(f"Number of sections: {n_sections}")
+
+    sections = []
+    for i in range(n_sections):
+        section_type = read_u32()
+        section_size = read_u64()
+        sections.append({"type": section_type, "size": section_size, "start": pos})
+        pos += section_size
+
+    header = None
+    constraints_section = None
+    prime = -1
+    field_size = -1
+    m_constraints = -1
+
+    for section in sections:
+        if section["type"] == 1:
+            header = section
+        elif section["type"] == 2:
+            constraints_section = section
+
+    if header:
+        pos = header["start"]
+        print("header:", pos)
+        field_size = read_u32()
+        prime = read_field_element(field_size)
+        n_wires = read_u32()
+        n_pub_out = read_u32()
+        n_pub_in = read_u32()
+        n_prv_in = read_u32()
+        n_labels = read_u64()
+        m_constraints = read_u32()
+
+        print("\n=== Header Details ===\n")
+        print(f"  Field size: {field_size} bytes")
+        print(f"  Prime (field modulus): {prime}")
+        print(f"  Number of wires: {n_wires}")
+        print(f"  Number of public outputs: {n_pub_out}")
+        print(f"  Number of public inputs: {n_pub_in}")
+        print(f"  Number of private inputs: {n_prv_in}")
+        print(f"  Number of labels: {n_labels}")
+        print(f"  Number of constraints: {m_constraints}")
+
+    if constraints_section:
+        pos = constraints_section["start"]
+        print("\n=== Constraints Section ===\n")
+        for c in range(m_constraints):
+            # A coefficients
+            n_a = read_u32()
+            a_coeffs = [
+                (read_u32(), read_field_element(field_size)) for _ in range(n_a)
+            ]
+
+            # B coefficients
+            n_b = read_u32()
+            b_coeffs = [
+                (read_u32(), read_field_element(field_size)) for _ in range(n_b)
+            ]
+
+            # C coefficients
+            n_c = read_u32()
+            c_coeffs = [
+                (read_u32(), read_field_element(field_size)) for _ in range(n_c)
+            ]
+
+            # Format each linear combination by factoring out a leading sign.
+            (a_sign, a_str) = factor_leading_sign(a_coeffs, prime)
+            (b_sign, b_str) = factor_leading_sign(b_coeffs, prime)
+            (c_sign, c_str) = factor_leading_sign(c_coeffs, prime)
+
+            # The original equation is: (a_sign*a_str) * (b_sign*b_str) = (c_sign*c_str)
+            # We rearrange to: a_str * b_str = (a_sign*b_sign*c_sign) * c_str
+            total_sign = a_sign * b_sign * c_sign
+
+            # Add parenthesis for multi-term expressions for clarity
+            a_print = f"({a_str})" if " " in a_str else a_str
+            b_print = f"({b_str})" if " " in b_str else b_str
+
+            if a_str == "0" or b_str == "0":
+                print(f"  Constraint {c}: {c_str} = 0")
+            else:
+                if total_sign == -1:
+                    # The A and B parts are now always positive-leading.
+                    # The C part gets the total sign.
+                    # Add parenthesis if c_str is a multi-term expression
+                    if " " in c_str:
+                        c_str = f"-({c_str})"
+                    elif c_str != "0":
+                        c_str = f"-{c_str}"
+
+                print(f"  Constraint {c}: {a_print} * {b_print} = {c_str}")
+
+
+def expected_falcon_constraints(lv):
+    if lv == 1:
+        n = 512
+        beta = 34034726
+    elif lv == 5:
+        n = 1024
+        beta = 70265242
+    else:
+        raise ValueError("Unsupported security level")
+
+    # - range check for s1, s2: 2 * n * (log2(4096)+1)
+    range_check = 2 * n * (4096).bit_length()
+
+    # - proof c q = s1 + s2 pk - h: n
+    proof_cq = n
+
+    # - || s1 ||^2 + || s2 ||^2 < beta: 2 n + 1 + beta.bit_length + 1
+    norm_check = 2 * n + 1 + beta.bit_length() + 1
+
+    return range_check + proof_cq + norm_check
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="R1CS Binary Format Parser")
+    parser.add_argument(
+        "circom_file",
+        nargs="?",
+        default="test.circom",
+        help="Path to the .circom file to compile and parse.",
+    )
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument(
+        "--O0", action="store_const", const="O0", dest="optimization_level",
+        help="Optimization level O0 for circom compiler."
+    )
+    group.add_argument(
+        "--O1", action="store_const", const="O1", dest="optimization_level",
+        help="Optimization level O1 for circom compiler."
+    )
+    group.add_argument(
+        "--O2", action="store_const", const="O2", dest="optimization_level",
+        help="Optimization level O2 for circom compiler."
+    )
+    parser.set_defaults(optimization_level="O1")
+    args = parser.parse_args()
+
+    print("=== Expected Falcon Constraints ===\n")
+    for lv in [1, 5]:
+        print(f"  Security Level {lv}: {expected_falcon_constraints(lv)} constraints\n")
+
+    # Determine the input .circom file path
+    script_dir = os.path.dirname(os.path.realpath(__file__))
+    circom_file_path = os.path.join(script_dir, args.circom_file)
+
+    if not os.path.exists(circom_file_path):
+        print(f"Error: Circom file not found at {circom_file_path}")
+        sys.exit(1)
+
+    # Determine output directory and r1cs file path
+    output_dir = os.path.dirname(circom_file_path)
+    if not output_dir:
+        output_dir = script_dir
+
+    base_name = os.path.basename(circom_file_path)
+    r1cs_file_path = os.path.join(output_dir, os.path.splitext(base_name)[0] + ".r1cs")
+
+    # Run the circom compiler
+    print("\n=== Compiling Circom File ===\n")
+    print(f"Compiling {circom_file_path} with optimization {args.optimization_level}...")
+    try:
+        subprocess.run(
+            ["circom", circom_file_path, "--r1cs", f"--{args.optimization_level}", "-o", output_dir],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        print("Compilation successful.\n")
+    except FileNotFoundError:
+        print(
+            "Error: 'circom' command not found. Please ensure it is installed and in your PATH."
+        )
+        print()
+        sys.exit(1)
+    except subprocess.CalledProcessError as e:
+        print(f"Error during circom compilation:")
+        print(e.stderr)
+        print()
+        sys.exit(1)
+
+    # Parse the generated .r1cs file
+    try:
+        with open(r1cs_file_path, "rb") as f:
+            r1cs_data = f.read()
+        parse_r1cs(r1cs_data)
+    except FileNotFoundError:
+        print(f"Error: R1CS file not found at {r1cs_file_path}")
+        sys.exit(1)

@@ -42,6 +42,8 @@
                 taplo
                 codespell
                 circom
+                nodejs
+                python3
                 ;
             };
         };
