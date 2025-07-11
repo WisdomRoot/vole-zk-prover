@@ -7,12 +7,11 @@
 //! And a proof the security should be no lower when used prime-field inputs rather than binary-field inputs which may be found in the Holonym V2 whitepaper
 
 use std::{str::FromStr, fmt::Debug};
-use ff::derive::rand_core::block;
+use bigdecimal::ToPrimitive;
 use itertools::Itertools;
 use bigdecimal::BigDecimal;
-use nalgebra::{SMatrix, Const, Vector, SVector};
-use num_bigint::{BigInt, BigUint};
-use num_traits::{FromPrimitive, ToPrimitive};
+use num_bigint::BigUint;
+use num_traits::FromPrimitive;
 
 /// This is easy: the IOWE of the repetition code. The rest of this file is for the accumulate code
 /// rate is 1/q
@@ -56,9 +55,9 @@ pub fn n_choose_k_square_matrix(n: usize) -> Vec<Vec<BigUint>>{
 }
 /// Calculates the Input Output Weight Enumeration for an accumulate code with input hamming weight w, output hamming weight h, and block size n
 pub fn calc_iowe_entry(input_hamming: usize, output_hamming: usize, block_size: usize, binomial_coeffs: &Vec<Vec<BigUint>>) -> BigUint {
-    if (input_hamming == 0) { 
-        return if (output_hamming == 0) { BigUint::from_u8(1).unwrap() } else { BigUint::from_u8(0).unwrap() }
-    } else if (output_hamming == 0) { 
+    if input_hamming == 0 { 
+        return if output_hamming == 0 { BigUint::from_u8(1).unwrap() } else { BigUint::from_u8(0).unwrap() }
+    } else if output_hamming == 0 { 
         return BigUint::from_u8(0).unwrap()
     }
     let w = input_hamming; //BigInt::from_usize(input_hamming).unwrap();
@@ -122,7 +121,7 @@ pub fn calc_multi_transition_prob_matrix(block_size: usize, num_accumulators: us
     if num_accumulators < 1 { panic!("num_accumulators must be >= 1") }
     let pm = calc_transition_prob_matrix(block_size);
     let mut res = pm.clone();
-    for _i in (1..num_accumulators) {
+    for _i in 1..num_accumulators {
         res = res.mul(
             &pm.clone()
         );

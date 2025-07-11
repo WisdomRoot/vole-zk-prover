@@ -1,7 +1,7 @@
 //! Reads and write proof formats.
-use crate::{actors::actors::Proof, Fr, FrRepr, PF};
+use crate::{Fr, FrRepr};
 use ff::PrimeField;
-use serde::{ser::{Serialize, Serializer, SerializeStruct}, de::{Deserialize, Visitor, Expected}};
+use serde::{ser::{Serialize, Serializer}, de::{Deserialize, Visitor}};
 
 // extern crate proc_macro;
 // use proc_macro::TokenStream;
