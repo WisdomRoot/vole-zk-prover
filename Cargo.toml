@@ -9,6 +9,7 @@ crate-type = ["lib", "cdylib"]
 
 [dependencies]
 anyhow = "1.0.75"
+clap = { version = "4.0", features = ["derive"] }
 bigdecimal = "0.4.2"
 bincode = "1.3.3"
 blake3 = "1.5.0"
@@ -45,3 +46,7 @@ harness = false
 [[bin]]
 name = "codeparams"
 path = "src/codeparams/mod.rs"
+
+[[bin]]
+name = "r1cs_parser"
+path = "src/bin/r1cs_parser.rs"

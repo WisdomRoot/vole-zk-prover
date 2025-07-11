@@ -11,14 +11,15 @@ pub mod vith;
 pub mod zkp;
 
 use std::{
-    fmt::Display,
+    fmt::{self, Display},
     ops::{Add, Mul, Neg, Sub, SubAssign},
 };
 
+use num_bigint::{BigInt, BigUint, Sign};
+use num_traits::Zero;
 use rand::rngs::ThreadRng;
 use serde::{Deserialize, Serialize};
-// use subspacevole::{ElementaryColumnOp, ElementaryColumnOpComposition};
-// use num_traits::Zero;
+
 #[macro_use]
 extern crate ff;
 use crate::ff::PrimeField;
@@ -32,6 +33,33 @@ const NUM_VOLES: u32 = 1024;
 // Important this matches the endianness of MODULUS_AS_U128s
 #[PrimeFieldReprEndianness = "big"]
 pub struct Fr([u64; 4]);
+
+impl Display for Fr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.norm())
+    }
+}
+
+impl Fr {
+    pub fn prime() -> BigUint {
+        let p = Fr::MODULUS;
+        BigUint::from_bytes_be(&hex::decode(&p[2..]).unwrap())
+    }
+
+    pub fn half_prime() -> BigUint {
+        Self::prime() / 2u32
+    }
+
+    pub fn norm(&self) -> BigInt {
+        let self_bu = BigUint::from_bytes_be(&self.to_repr().0);
+        if self_bu > Self::half_prime() {
+            BigInt::from_biguint(Sign::Plus, self_bu)
+                - BigInt::from_biguint(Sign::Plus, Self::prime())
+        } else {
+            BigInt::from_biguint(Sign::Plus, self_bu)
+        }
+    }
+}
 
 /// Alias for types suitable for the prime field element
 pub trait PF: PrimeField + Add + Sub + Mul + FromU8s + ToU8s {}
@@ -78,10 +106,7 @@ impl Display for FVec<Fr> {
             "[ {} ]",
             self.0
                 .iter()
-                .map(|fr| {
-                    let repr = fr.to_repr().0;
-                    format!("0x{:02x}..{:02x}", repr[0], repr[31])
-                })
+                .map(|fr| format!("{}", fr))
                 .collect::<Vec<String>>()
                 .join(", ")
         )
@@ -211,6 +236,16 @@ impl<T: PF> DotProduct<T> for FVec<T> {
     }
 }
 
+impl<T: PF> SparseVec<T> {
+    pub fn to_fvec(&self, len: usize) -> FVec<T> {
+        let mut vec = vec![T::ZERO; len];
+        for (idx, val) in self.0.iter() {
+            vec[*idx] = *val;
+        }
+        FVec(vec)
+    }
+}
+
 impl<T: PF> PartialEq for FVec<T> {
     fn eq(&self, rhs: &Self) -> bool {
         self.0.iter().zip(rhs.0.iter()).all(|(a, b)| a == b)
@@ -259,6 +294,12 @@ impl<T: PF> FMatrix<T> {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SparseFMatrix<T: PF>(pub Vec<SparseVec<T>>);
+
+impl<T: PF> SparseFMatrix<T> {
+    pub fn to_fmatrix(&self, len: usize) -> FMatrix<T> {
+        FMatrix(self.0.iter().map(|row| row.to_fvec(len)).collect())
+    }
+}
 
 impl<'a, 'b, T: PF> Add<&'b FMatrix<T>> for &'a FMatrix<T> {
     type Output = FMatrix<T>;
@@ -345,4 +386,3 @@ mod test {
         assert!(a.sparse_dot(&b) == Fr::from_u128(6900));
     }
 }
-

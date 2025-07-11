@@ -2,9 +2,10 @@
 
 use std::io::Read;
 
-use anyhow::Error;
 use byteorder::{LittleEndian, ReadBytesExt};
 use ff::PrimeField;
+
+pub mod generator;
 
 use crate::{Fr, FrRepr, SparseVec};
 pub mod witness;
@@ -30,7 +31,7 @@ fn read_fr_vec<R: Read>(mut reader: R, l: usize) -> Vec<Fr> {
 }
 
 /// Reads l u32 wire labels and corresponding Frs from a R1CS file
-fn read_constraint_vec<R: Read>(mut reader: R) -> SparseVec<Fr> {
+pub fn read_constraint_vec<R: Read>(mut reader: R) -> SparseVec<Fr> {
     let l = reader.read_u32::<LittleEndian>().unwrap() as usize;
     let mut constraints = Vec::with_capacity(l);
     for _ in 0..l {

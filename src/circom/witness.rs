@@ -1,11 +1,10 @@
 use anyhow::{bail, Error};
-use ff::PrimeField;
 use std::io::Read;
 use byteorder::{LittleEndian, ReadBytesExt};
 
 use crate::{FVec, Fr};
 
-use super::{read_fr, read_fr_vec};
+use super::read_fr_vec;
 
 /// Parses bytes in a circom .wtns binary format
 /// Borrowed extensively from Nova Scotia https://github.com/nalinbhardwaj/Nova-Scotia/blob/main/src/circom/reader.rs

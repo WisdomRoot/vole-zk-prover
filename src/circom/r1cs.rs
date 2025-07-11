@@ -1,12 +1,22 @@
 //! Borrowed extensively from Nova Scotia https://github.com/nalinbhardwaj/Nova-Scotia/
 
+use crate::ff::PrimeField;
 use anyhow::{bail, Error};
-use ff::PrimeField;
-use itertools::Itertools;
-use std::{io::{Read, Seek, SeekFrom}, collections::HashMap};
 use byteorder::{LittleEndian, ReadBytesExt};
+use itertools::Itertools;
+use num_bigint::{BigInt, Sign};
+use num_traits::One as _;
+use std::{
+    collections::HashMap,
+    fmt,
+    io::{Read, Seek, SeekFrom},
+};
 
-use crate::{FVec, FMatrix, PF, zkp::{R1CS, R1CSWithMetadata, FullR1CS, SparseR1CS}, SparseFMatrix, SparseVec, Fr};
+use crate::{
+    zkp::{R1CSWithMetadata, SparseR1CS, R1CS},
+    Fr, SparseFMatrix, SparseVec,
+};
+use num_bigint::BigUint;
 
 use super::read_constraint_vec;
 
@@ -14,7 +24,7 @@ use super::read_constraint_vec;
 #[derive(Debug)]
 pub struct Header {
     pub field_size: u32,
-    pub prime_size: Vec<u8>,
+    pub prime_size: BigUint,
     pub n_wires: u32,
     pub n_pub_out: u32,
     pub n_pub_in: u32,
@@ -28,9 +38,6 @@ pub struct Constraints {
     a_rows: SparseFMatrix<Fr>,
     b_rows: SparseFMatrix<Fr>,
     c_rows: SparseFMatrix<Fr>,
-    // a_wires: Vec<Vec<usize>>,
-    // b_wires: Vec<Vec<usize>>,
-    // c_wires: Vec<Vec<usize>>
 }
 
 #[derive(Debug)]
@@ -47,16 +54,22 @@ impl R1CSFile {
         let r1cs_ = SparseR1CS {
             a_rows: self.constraints.a_rows,
             b_rows: self.constraints.b_rows,
-            c_rows: self.constraints.c_rows
+            c_rows: self.constraints.c_rows,
         };
         let pub_in_start = 1 + self.header.n_pub_out as usize;
-        let public_outputs_indices = (1 .. pub_in_start).collect_vec();
-        let public_inputs_indices = (pub_in_start .. pub_in_start + self.header.n_pub_in as usize).collect_vec();
+        let public_outputs_indices = (1..pub_in_start).collect_vec();
+        let public_inputs_indices =
+            (pub_in_start..pub_in_start + self.header.n_pub_in as usize).collect_vec();
         let unpadded_wtns_len = self.header.n_wires as usize; // overflow is possible but not practical given circuits of feasible size
         let r1cs = R1CS::Sparse(r1cs_);
-        R1CSWithMetadata { r1cs, public_inputs_indices, public_outputs_indices, unpadded_wtns_len }
+        R1CSWithMetadata {
+            r1cs,
+            public_inputs_indices,
+            public_outputs_indices,
+            unpadded_wtns_len,
+        }
     }
-    
+
     /// Parses bytes in a circom .r1cs binary format
     pub fn from_reader<R: Read + Seek>(mut reader: R) -> Result<Self, Error> {
         let mut magic = [0u8; 4];
@@ -96,7 +109,7 @@ impl R1CSFile {
             bail!("This parser only supports 32-byte fields");
         }
 
-        if header.prime_size != hex::decode("010000f093f5e1439170b97948e833285d588181b64550b829a031e1724e6430").unwrap() {
+        if header.prime_size != Fr::prime() {
             bail!("This parser only supports bn254");
         }
 
@@ -126,13 +139,14 @@ impl R1CSFile {
             wire_mapping,
         })
     }
-
 }
 
 fn read_header<R: Read>(mut reader: R, size: u64) -> Result<Header, Error> {
     let field_size = reader.read_u32::<LittleEndian>()?;
-    let mut prime_size = vec![0u8; field_size as usize];
-    reader.read_exact(&mut prime_size)?;
+    let mut prime_size_bytes = vec![0u8; field_size as usize];
+    reader.read_exact(&mut prime_size_bytes)?;
+    let prime_size = BigUint::from_bytes_le(&prime_size_bytes);
+
     if size != 32 + field_size as u64 {
         bail!("Invalid header section size");
     }
@@ -149,22 +163,12 @@ fn read_header<R: Read>(mut reader: R, size: u64) -> Result<Header, Error> {
     })
 }
 
-fn read_constraints<R: Read>(
-    mut reader: R,
-    size: u64,
-    header: &Header,
-) -> Constraints {
-    
+fn read_constraints<R: Read>(mut reader: R, _size: u64, header: &Header) -> Constraints {
     let mut a_rows = Vec::with_capacity(header.n_constraints as usize);
     let mut b_rows = Vec::with_capacity(header.n_constraints as usize);
     let mut c_rows = Vec::with_capacity(header.n_constraints as usize);
 
-    // let mut a_wires = Vec::with_capacity(header.n_constraints as usize);
-    // let mut b_wires = Vec::with_capacity(header.n_constraints as usize);
-    // let mut c_wires = Vec::with_capacity(header.n_constraints as usize);
-
-    let mut constraints: Vec<SparseVec<Fr>> = Vec::with_capacity(header.n_constraints as usize);
-    for i in 0..header.n_constraints {
+    for _ in 0..header.n_constraints {
         a_rows.push(read_constraint_vec(&mut reader));
         b_rows.push(read_constraint_vec(&mut reader));
         c_rows.push(read_constraint_vec(&mut reader));
@@ -173,7 +177,11 @@ fn read_constraints<R: Read>(
     let b_rows = SparseFMatrix(b_rows);
     let c_rows = SparseFMatrix(c_rows);
 
-    Constraints { a_rows, b_rows, c_rows }
+    Constraints {
+        a_rows,
+        b_rows,
+        c_rows,
+    }
 }
 
 fn read_map<R: Read>(mut reader: R, size: u64, header: &Header) -> Result<Vec<u64>, Error> {
@@ -190,22 +198,115 @@ fn read_map<R: Read>(mut reader: R, size: u64, header: &Header) -> Result<Vec<u6
     Ok(vec)
 }
 
+fn factor_leading_sign(coeffs: &SparseVec<Fr>) -> (i32, String) {
+    if coeffs.0.is_empty() {
+        return (0, "0".to_string());
+    }
+
+    let first_coeff = coeffs.0[0].1.norm();
+    let sign = if first_coeff.sign() == Sign::Minus {
+        -1
+    } else {
+        1
+    };
+
+    let mut terms = Vec::new();
+    for (i, (var_idx, coeff_val)) in coeffs.0.iter().enumerate() {
+        let norm_coeff: BigInt = coeff_val.norm() * sign;
+
+        let one = BigInt::one();
+        let term = match (i, *var_idx, norm_coeff) {
+            (0, 0, c) if c == one => "1".to_string(),
+            (0, 0, c) => format!("{c}"),
+            (0, idx, c) if c == one => format!("x{idx}"),
+            (0, idx, c) => format!("{c}*x{idx}"),
+            (_, 0, c) if c.sign() == Sign::Plus => format!("+ {c}"),
+            (_, 0, c) => format!("- {}", -c),
+            (_, idx, c) if c == one => format!("+ x{idx}"),
+            (_, idx, c) if c == BigInt::from(-1) => format!("- x{idx}"),
+            (_, idx, c) if c.sign() == Sign::Plus => format!("+ {c}*x{idx}"),
+            (_, idx, c) => format!("- {}*x{idx}", -c),
+        };
+        terms.push(term);
+    }
+    (sign, terms.join(" "))
+}
+
+impl fmt::Display for R1CSFile {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "=== R1CS Binary Format Parser ===\n")?;
+        writeln!(f, "Version: {}", self.version)?;
+        writeln!(f, "Number of sections: {}", 3)?;
+        writeln!(f, "\n=== Header Details ===\n")?;
+        writeln!(f, "  Field size: {} bytes", self.header.field_size)?;
+        writeln!(f, "  Prime (field modulus): {}", self.header.prime_size)?;
+        writeln!(f, "  Number of wires: {}", self.header.n_wires)?;
+        writeln!(f, "  Number of public outputs: {}", self.header.n_pub_out)?;
+        writeln!(f, "  Number of public inputs: {}", self.header.n_pub_in)?;
+        writeln!(f, "  Number of private inputs: {}", self.header.n_prv_in)?;
+        writeln!(f, "  Number of labels: {}", self.header.n_labels)?;
+        writeln!(f, "  Number of constraints: {}", self.header.n_constraints)?;
+        writeln!(f, "\n=== Constraints Section ===\n")?;
+        write!(f, "{}", self.constraints)
+    }
+}
+
+impl fmt::Display for Constraints {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for i in 0..self.a_rows.0.len() {
+            let (a_sign, a_str) = factor_leading_sign(&self.a_rows.0[i]);
+            let (b_sign, b_str) = factor_leading_sign(&self.b_rows.0[i]);
+            let (c_sign, c_str) = factor_leading_sign(&self.c_rows.0[i]);
+
+            let total_sign = a_sign * b_sign * c_sign;
+
+            let a_print = if a_str.contains(' ') {
+                format!("({})", a_str)
+            } else {
+                a_str.clone()
+            };
+            let b_print = if b_str.contains(' ') {
+                format!("({})", b_str)
+            } else {
+                b_str.clone()
+            };
+
+            if a_str == "0" || b_str == "0" {
+                writeln!(f, "  Constraint {i}: {c_str} = 0")?;
+            } else {
+                let c_str = match total_sign {
+                    -1 if c_str.contains(' ') => format!("-({})", c_str),
+                    -1 if c_str != "0" => format!("-{}", c_str),
+                    _ => c_str,
+                };
+
+                writeln!(
+                    f,
+                    "  Constraint {}: {} * {} = {}",
+                    i, a_print, b_print, c_str
+                )?;
+            }
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod test {
-    use std::{fs::{self, File}, io::BufReader};
+    use std::{fs::File, io::BufReader};
 
     use super::*;
     #[test]
     fn read_r1cs_file() {
         let file = File::open("src/circom/examples/test.r1cs").unwrap();
-        let mut buf_reader = BufReader::new(file);
+        let buf_reader = BufReader::new(file);
         let r1cs = R1CSFile::from_reader(buf_reader).unwrap();
     }
 
     #[test]
     fn correct_public_indices() {
         let file = File::open("src/circom/examples/test.r1cs").unwrap();
-        let mut buf_reader = BufReader::new(file);
+        let buf_reader = BufReader::new(file);
         let r1cs = R1CSFile::from_reader(buf_reader).unwrap();
         let r1cs = r1cs.to_crate_format();
         assert!(r1cs.public_outputs_indices == (1..258).collect_vec());
