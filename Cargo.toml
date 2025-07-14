@@ -52,3 +52,7 @@ path = "src/codeparams/mod.rs"
 [[bin]]
 name = "r1cs_tool"
 path = "src/bin/r1cs_tool.rs"
+
+[[bin]]
+name = "measure_time"
+path = "src/bin/measure_time.rs"
