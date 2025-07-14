@@ -50,5 +50,5 @@ name = "codeparams"
 path = "src/codeparams/mod.rs"
 
 [[bin]]
-name = "r1cs_parser"
-path = "src/bin/r1cs_parser.rs"
+name = "r1cs_tool"
+path = "src/bin/r1cs_tool.rs"

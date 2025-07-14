@@ -1,0 +1,132 @@
+pragma circom 2.1.5;
+
+include "node_modules/circomlib/circuits/comparators.circom";
+
+// check s[i] < m, m must be power of 2
+template RangeCheck(n, m) {
+    signal input s[n];
+    component bs[n];
+
+    for (var i = 0; i < n; i++) {
+        bs[i] = Num2Bits(nbits(m)-1);
+        bs[i].in <== s[i];
+    }
+}
+
+function Getn({{#each pk}}{{#if @first}}pk_{{@index}}{{else}}, pk_{{@index}}{{/if}}{{/each}}) {
+   var n = 0;
+   {{#each pk}}n += 1;{{/each}}
+   return n;
+}
+
+function Getq() {
+   return 12289;
+}
+
+// falcon  512: 34034726
+//        1024: 70265242
+function Getbeta(n) {
+    if (n == 512) {
+        return 34034726;
+    } else if (n == 1024) {
+        return 70265242;
+    } else {
+        // for testing purpose
+        return 12;
+    }
+}
+
+// c * q = s1 + s2 pk - h
+template Falcon_correctness({{#each pk}}{{#if @first}}pk_{{@index}}{{else}}, pk_{{@index}}{{/if}}{{/each}}) {
+    var n = Getn({{#each pk}}{{#if @first}}pk_{{@index}}{{else}}, pk_{{@index}}{{/if}}{{/each}});
+    // private
+    signal input s1[n];
+    signal input s2[n];
+    signal input c[n];
+    // public
+    signal input h[n];
+
+    var rhs[n];
+    var lhs[n];
+    var q = Getq();
+
+    for (var i = 0; i < n; i++) {
+      rhs[i] = s1[i] - h[i];
+      {{#each pk}}
+      rhs[i] += s2[(n+i-{{@index}})%n] * pk_{{@index}};
+      {{/each}}
+
+      lhs[i] = c[i] * q;
+      lhs[i] === rhs[i];
+    }
+}
+
+template Length_check(n, beta) {
+    signal input s1[n];
+    signal input s2[n];
+    signal t1[n];
+    signal t2[n];
+    var t = 0;
+
+    for (var i = 0; i < n; i++) {
+        t1[i] <== s1[i] * s1[i];
+        t2[i] <== s2[i] * s2[i];
+        t += t1[i];
+        t += t2[i];
+    }
+
+    var x = 1;
+    var b = 0;
+    while (x < beta) {
+        b++;
+        x *= 2;
+    }
+
+    // 0 <= t <= next_pow_2(beta)
+    component t3 = Num2Bits(b);
+    t3.in <== t;
+
+    // 0 <= t + next_pow_2(beta) - beta <= next_pow_2(beta)
+    t += x - beta;
+
+    component t4 = Num2Bits(b);
+    t4.in <== t;
+}
+
+template Falcon({{#each pk}}{{#if @first}}pk_{{@index}}{{else}}, pk_{{@index}}{{/if}}{{/each}}) {
+    var n = Getn({{#each pk}}{{#if @first}}pk_{{@index}}{{else}}, pk_{{@index}}{{/if}}{{/each}});
+    // private
+    signal input s1[n];
+    signal input s2[n];
+    signal input c[n];
+    // public
+    signal input h[n];
+
+    // range check for s1, s2
+    component _s1 = RangeCheck(n, 4096);
+    for (var i = 0; i < n; i++) {
+        _s1.s[i] <== s1[i];
+    }
+
+    component _s2 = RangeCheck(n, 4096);
+    for (var i = 0; i < n; i++) {
+        _s2.s[i] <== s2[i];
+    }
+
+    component _c = Falcon_correctness({{#each pk}}{{#if @first}}pk_{{@index}}{{else}}, pk_{{@index}}{{/if}}{{/each}});
+    for (var i = 0; i < n; i++) {
+        _c.s1[i] <== s1[i];
+        _c.s2[i] <== s2[i];
+        _c.c[i] <== c[i];
+        _c.h[i] <== h[i];
+    }
+
+    // || s1 ||^2 + || s2 || ^2 < beta
+    component _l = Length_check(n, Getbeta(n));
+    for (var i = 0; i < n; i++) {
+        _l.s1[i] <== s1[i];
+        _l.s2[i] <== s2[i];
+    }
+}
+
+component main = Falcon({{#each pk}}{{#if @first}}{{this}}{{else}}, {{this}}{{/if}}{{/each}});

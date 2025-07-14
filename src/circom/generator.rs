@@ -5,41 +5,17 @@ use std::fs::File;
 use std::io::Write;
 use std::path::Path;
 
-pub fn generate_template(path: &Path, n: usize, function_name: &str) -> Result<()> {
+pub fn generate_circom(output_path: &Path, template_path: &Path, pk: Vec<u8>) -> Result<()> {
     let mut handlebars = Handlebars::new();
-    let template_str = r#"template {{function_name}}({{#each indices as |i|}}{{#if @first}}pk_{{i}}{{else}},pk_{{i}}{{/if}}{{/each}}) {
-    signal input s1[{{n}}];
-    signal input s2[{{n}}];
-    signal input h[{{n}}];
-    signal output c[{{n}}];
-
-    var d[{{n}}];
-
-    for (var i = 0; i < {{n}}; i++) {
-      d[i] = s1[i] - h[i];
-      {{#each indices as |j|}}
-      d[i] += s2[(n+i-{{j}})%n] * pk_{{j}};
-      {{/each}}
-
-      c[i] <== d[i];
-    }
-    // Template body goes here
-}
-"#;
-
-    handlebars.register_template_string("template", template_str)?;
-
-    let indices: Vec<usize> = (0..n).collect();
+    handlebars.register_template_file("template", template_path)?;
 
     let data = json!({
-        "n": n,
-        "function_name": function_name,
-        "indices": indices,
+        "pk": pk,
     });
 
     let output = handlebars.render("template", &data)?;
 
-    let mut file = File::create(path)?;
+    let mut file = File::create(output_path)?;
     file.write_all(output.as_bytes())?;
 
     Ok(())
@@ -48,15 +24,16 @@ pub fn generate_template(path: &Path, n: usize, function_name: &str) -> Result<(
 #[cfg(test)]
 mod test {
     use super::*;
+    use rand::RngCore;
 
     #[test]
     fn test_generate_template() {
-        let path = Path::new("src/circom/examples/gen.circom");
-        let n = 3;
-        let function_name = "MyCircuit";
-        generate_template(path, n, function_name).unwrap();
-
-        // fs::remove_file(path).unwrap(); // Keep for inspection
+        let output_path = Path::new("src/circom/examples/test.circom");
+        let template_path = Path::new("src/circom/examples/test.hbs");
+        let mut rng = rand::thread_rng();
+        let mut pk_vec = vec![0u8; 3];
+        rng.fill_bytes(&mut pk_vec);
+        generate_from_template(output_path, template_path, pk_vec).unwrap();
     }
 }
 

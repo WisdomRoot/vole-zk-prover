@@ -1,49 +1,71 @@
 pragma circom 2.1.5;
-include "node_modules/circomlib/circuits/sha256/sha256.circom";
-include "node_modules/circomlib/circuits/bitify.circom";
 
-template TestCircuit(Sha256IterationsMinusOne) {  
-   signal input testInputs[3];
-   signal input publicInput;
-   signal input anotherPublicInput;
-   signal output digest[256];
-   signal output unimportantOutput;
+include "node_modules/circomlib/circuits/comparators.circom";
 
-   signal sig <== publicInput * testInputs[0] + testInputs[1] + testInputs[2];
-   unimportantOutput <== sig * anotherPublicInput;
+// check s[i] < m, m must be power of 2
+template RangeCheck(n, m) {
+    signal input s[n];
+    component bs[n];
 
-   component n2b = Num2Bits(254);
-
-   n2b.in <== testInputs[0] + testInputs[0] + testInputs[0] + testInputs[0];
-   
-   component initialHash = Sha256(256);
-   initialHash.in[0] <== 0;
-   initialHash.in[1] <== 0;
-   var i;
-   for(i=2; i<256; i++) {
-      initialHash.in[i] <== n2b.out[i-2];
-   }
-
-   component newHashes[Sha256IterationsMinusOne]; 
-   newHashes[0] = Sha256(256);
-   newHashes[0].in <== initialHash.out;
-   var j;
-   for(j=1; j<Sha256IterationsMinusOne; j++) {
-      newHashes[j] = Sha256(256);
-      newHashes[j].in <== newHashes[j-1].out;
-   }
-
-   digest <== newHashes[Sha256IterationsMinusOne-1].out;
-   
-   // // Declaration of signals.  
-   // signal input a[4];  
-   // signal input b[4];  
-   // signal output c[3];  
-    
-   // // Constraints.  
-   // c[0] <== (a[0] + a[3]) * b[0];
-   // c[1] <== (a[1] + a[2]) * b[1];
-   // c[2] <== a[3] * b[2] + b[3];
+    for (var i = 0; i < n; i++) {
+        bs[i] = Num2Bits(nbits(m)-1);
+        bs[i].in <== s[i];
+    }
 }
 
-component main { public [publicInput, anotherPublicInput] } = TestCircuit(9);
+function Getn(pk_0, pk_1, pk_2, pk_3, pk_4, pk_5, pk_6, pk_7, pk_8, pk_9) {
+   var n = 0;
+   n += 1;n += 1;n += 1;n += 1;n += 1;n += 1;n += 1;n += 1;n += 1;n += 1;
+   return n;
+}
+
+// c * q = s1 + s2 pk - h
+template Falcon_correctness(pk_0, pk_1, pk_2, pk_3, pk_4, pk_5, pk_6, pk_7, pk_8, pk_9) {
+    var n = Getn(pk_0, pk_1, pk_2, pk_3, pk_4, pk_5, pk_6, pk_7, pk_8, pk_9);
+    signal input s1[n];
+    signal input s2[n];
+    signal input h[n];
+    signal input c[n];
+
+    var rhs[n];
+    var lhs[n];
+    var q = 12289;
+
+    for (var i = 0; i < n; i++) {
+      rhs[i] = s1[i] - h[i];
+      rhs[i] += s2[(n+i-0)%n] * pk_0;
+      rhs[i] += s2[(n+i-1)%n] * pk_1;
+      rhs[i] += s2[(n+i-2)%n] * pk_2;
+      rhs[i] += s2[(n+i-3)%n] * pk_3;
+      rhs[i] += s2[(n+i-4)%n] * pk_4;
+      rhs[i] += s2[(n+i-5)%n] * pk_5;
+      rhs[i] += s2[(n+i-6)%n] * pk_6;
+      rhs[i] += s2[(n+i-7)%n] * pk_7;
+      rhs[i] += s2[(n+i-8)%n] * pk_8;
+      rhs[i] += s2[(n+i-9)%n] * pk_9;
+
+      lhs[i] = c[i] * q;
+      lhs[i] === rhs[i];
+    }
+}
+
+template Falcon(pk_0, pk_1, pk_2, pk_3, pk_4, pk_5, pk_6, pk_7, pk_8, pk_9) {
+    var n = Getn(pk_0, pk_1, pk_2, pk_3, pk_4, pk_5, pk_6, pk_7, pk_8, pk_9);
+    signal input s1[n];
+    signal input s2[n];
+
+    // range check for s1, s2
+    component _s1 = RangeCheck(n, 4096);
+    for (var i = 0; i < n; i++) {
+        _s1.s[i] <== s1[i];
+    }
+
+    component _s2 = RangeCheck(n, 4096);
+    for (var i = 0; i < n; i++) {
+        _s2.s[i] <== s2[i];
+    }
+
+    component _c = Falcon_correctness(pk_0, pk_1, pk_2, pk_3, pk_4, pk_5, pk_6, pk_7, pk_8, pk_9);
+}
+
+component main = Falcon_correctness(225, 189, 31, 79, 183, 87, 45, 1, 170, 104);
