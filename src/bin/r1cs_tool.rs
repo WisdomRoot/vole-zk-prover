@@ -56,6 +56,9 @@ enum Commands {
         /// Path to the directory containing input and output files.
         #[arg(default_value = "src/circom/examples")]
         path: String,
+        /// Path to the .toml file to parse.
+        #[arg(default_value = "src/bin/falcon-512-nist.toml")]
+        toml_file: String,
     },
 }
 
@@ -212,8 +215,8 @@ fn main() -> Result<()> {
             let r1cs_file_path = compile(&circom_file_path, optimization.level())?;
             parse(&r1cs_file_path)
         }
-        Commands::Falcon { path } => {
-            let toml_str = fs::read_to_string("src/bin/falcon-512-nist.toml")?;
+        Commands::Falcon { path, toml_file } => {
+            let toml_str = fs::read_to_string(toml_file)?;
             let falcon_cases: FalconCases = toml::from_str(&toml_str)?;
             let first_case = &falcon_cases.cases[2];
 
