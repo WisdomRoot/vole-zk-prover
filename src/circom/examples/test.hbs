@@ -9,7 +9,7 @@ template RangeCheck(n, m) {
 
     for (var i = 0; i < n; i++) {
         bs[i] = Num2Bits(nbits(m)-1);
-        bs[i].in <== s[i];
+        bs[i].in <== s[i]+2047;
     }
 }
 
@@ -19,8 +19,14 @@ function Getn({{#each pk}}{{#if @first}}pk_{{@index}}{{else}}, pk_{{@index}}{{/i
    return n;
 }
 
-function Getq() {
-   return 12289;
+function Getq(n) {
+    if (n == 512) {
+        return 12289;
+    } else if (n == 1024) {
+        return 12289;
+    } else {
+        return 11;
+    }
 }
 
 // falcon  512: 34034726
@@ -37,7 +43,7 @@ function Getbeta(n) {
 }
 
 // c * q = s1 + s2 pk - h
-template Falcon_correctness({{#each pk}}{{#if @first}}pk_{{@index}}{{else}}, pk_{{@index}}{{/if}}{{/each}}) {
+template Falcon_correctness(q, {{#each pk}}{{#if @first}}pk_{{@index}}{{else}}, pk_{{@index}}{{/if}}{{/each}}) {
     var n = Getn({{#each pk}}{{#if @first}}pk_{{@index}}{{else}}, pk_{{@index}}{{/if}}{{/each}});
     // private
     signal input s1[n];
@@ -48,14 +54,22 @@ template Falcon_correctness({{#each pk}}{{#if @first}}pk_{{@index}}{{else}}, pk_
 
     var rhs[n];
     var lhs[n];
-    var q = Getq();
 
     for (var i = 0; i < n; i++) {
       rhs[i] = s1[i] - h[i];
-      {{#each pk}}
-      rhs[i] += s2[(n+i-{{@index}})%n] * pk_{{@index}};
-      {{/each}}
+    }
 
+    for (var i = 0; i < n; i++) {
+      {{#each pk}}
+      if ((i + {{@index}})\n == 1) {
+        rhs[(i+{{@index}})%n] -= s2[i] * pk_{{@index}};
+      } else {
+        rhs[(i+{{@index}})%n] += s2[i] * pk_{{@index}};
+      }
+      {{/each}}
+    }
+
+    for (var i = 0; i < n; i++) {
       lhs[i] = c[i] * q;
       lhs[i] === rhs[i];
     }
@@ -93,7 +107,7 @@ template Length_check(n, beta) {
     t4.in <== t;
 }
 
-template Falcon({{#each pk}}{{#if @first}}pk_{{@index}}{{else}}, pk_{{@index}}{{/if}}{{/each}}) {
+template Falcon(q, {{#each pk}}{{#if @first}}pk_{{@index}}{{else}}, pk_{{@index}}{{/if}}{{/each}}) {
     var n = Getn({{#each pk}}{{#if @first}}pk_{{@index}}{{else}}, pk_{{@index}}{{/if}}{{/each}});
     // private
     signal input s1[n];
@@ -113,7 +127,7 @@ template Falcon({{#each pk}}{{#if @first}}pk_{{@index}}{{else}}, pk_{{@index}}{{
         _s2.s[i] <== s2[i];
     }
 
-    component _c = Falcon_correctness({{#each pk}}{{#if @first}}pk_{{@index}}{{else}}, pk_{{@index}}{{/if}}{{/each}});
+    component _c = Falcon_correctness(q, {{#each pk}}{{#if @first}}pk_{{@index}}{{else}}, pk_{{@index}}{{/if}}{{/each}});
     for (var i = 0; i < n; i++) {
         _c.s1[i] <== s1[i];
         _c.s2[i] <== s2[i];
@@ -129,4 +143,4 @@ template Falcon({{#each pk}}{{#if @first}}pk_{{@index}}{{else}}, pk_{{@index}}{{
     }
 }
 
-component main = Falcon({{#each pk}}{{#if @first}}{{this}}{{else}}, {{this}}{{/if}}{{/each}});
+component main = Falcon({{q}}, {{#each pk}}{{#if @first}}{{this}}{{else}}, {{this}}{{/if}}{{/each}});

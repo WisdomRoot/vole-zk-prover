@@ -52,7 +52,11 @@ enum Commands {
         optimization: Optimization,
     },
     /// Parse falcon-512-nist.toml and generate input.json
-    Falcon,
+    Falcon {
+        /// Path to the directory containing input and output files.
+        #[arg(default_value = "src/circom/examples")]
+        path: String,
+    },
 }
 
 #[derive(Parser, Debug)]
@@ -103,11 +107,13 @@ struct FalconCases {
 #[derive(Debug, Deserialize)]
 struct FalconCase {
     #[serde(rename = "N")]
-    _N: usize,
+    n: usize,
+    #[serde(rename = "Q")]
+    q: i64,
     pk: String,
     s1: String,
     s2: String,
-    hm: String,
+    h: String,
     c: String,
 }
 
@@ -202,22 +208,25 @@ fn main() -> Result<()> {
             let template_file_path = PathBuf::from(template_file);
             let mut rng = thread_rng();
             let pk: Vec<i64> = (0..*n).map(|_| rng.gen()).collect();
-            let circom_file_path = generate(&template_file_path, pk)?;
+            let circom_file_path = generate(&template_file_path, 12289, pk)?;
             let r1cs_file_path = compile(&circom_file_path, optimization.level())?;
             parse(&r1cs_file_path)
         }
-        Commands::Falcon => {
+        Commands::Falcon { path } => {
             let toml_str = fs::read_to_string("src/bin/falcon-512-nist.toml")?;
             let falcon_cases: FalconCases = toml::from_str(&toml_str)?;
-            let first_case = &falcon_cases.cases[0];
+            let first_case = &falcon_cases.cases[2];
 
-            println!("{}", first_case._N);
-            let pk = to_i64_vec(&parse_poly(&first_case.pk), first_case._N);
-            let s1 = to_string_vec(&parse_poly(&first_case.s1), first_case._N);
-            let s2 = to_string_vec(&parse_poly(&first_case.s2), first_case._N);
-            let h = to_string_vec(&parse_poly(&first_case.hm), first_case._N);
-            let c = to_string_vec(&parse_poly(&first_case.c), first_case._N);
+            let pk = to_i64_vec(&parse_poly(&first_case.pk), first_case.n);
+            let s1 = to_string_vec(&parse_poly(&first_case.s1), first_case.n);
+            let s2 = to_string_vec(&parse_poly(&first_case.s2), first_case.n);
+            let h = to_string_vec(&parse_poly(&first_case.h), first_case.n);
+            let c = to_string_vec(&parse_poly(&first_case.c), first_case.n);
 
+            let base_path = PathBuf::from(path);
+            let input_json_path = base_path.join("input.json");
+
+            println!("=== Generating input.json ===\n");
             let mut output_map = BTreeMap::new();
             output_map.insert("s1", s1);
             output_map.insert("s2", s2);
@@ -225,14 +234,14 @@ fn main() -> Result<()> {
             output_map.insert("h", h);
 
             let json_str = serde_json::to_string_pretty(&output_map)?;
-            let mut file = File::create("src/circom/examples/input.json")?;
+            let mut file = File::create(&input_json_path)?;
             file.write_all(json_str.as_bytes())?;
 
-            println!("Successfully wrote to src/circom/examples/input.json");
+            println!("Successfully wrote to {}\n", input_json_path.display());
 
             // Pass pk_raw to generate function
-            let template_file_path = PathBuf::from("src/circom/examples/test.hbs");
-            let circom_file_path = generate(&template_file_path, pk)?;
+            let template_file_path = base_path.join("test.hbs");
+            let circom_file_path = generate(&template_file_path, first_case.q, pk)?;
             let r1cs_file_path = compile(
                 &circom_file_path,
                 Optimization {
@@ -243,6 +252,33 @@ fn main() -> Result<()> {
                 .level(),
             )?;
             parse(&r1cs_file_path)?;
+
+            // Run the witness generation command
+            let generate_witness_js_path = PathBuf::from("test_js/generate_witness.js");
+            let test_wasm_path = PathBuf::from("test_js/test.wasm");
+            let witness_wtns_path = PathBuf::from("witness.wtns");
+
+            println!("=== Generating Witness ===\n");
+            let start_time = Instant::now();
+            let output = Command::new("node")
+                .current_dir(&base_path)
+                .arg(&generate_witness_js_path)
+                .arg(&test_wasm_path)
+                .arg(&input_json_path.file_name().unwrap())
+                .arg(&witness_wtns_path)
+                .output()
+                .context("Failed to execute node command for witness generation. Is Node.js installed and in your PATH?")?;
+            let elapsed_time = start_time.elapsed();
+
+            if !output.status.success() {
+                eprintln!("Error during witness generation:");
+                eprintln!("{}", String::from_utf8_lossy(&output.stderr));
+                anyhow::bail!("Witness generation failed");
+            }
+            println!(
+                "Witness generation successful in {:.2?}s.\n",
+                elapsed_time.as_secs()
+            );
 
             Ok(())
         }
@@ -302,10 +338,10 @@ fn compile(circom_file_path: &Path, optimization_level: OptimizationLevel) -> Re
     Ok(r1cs_file_path)
 }
 
-fn generate(template_file_path: &Path, pk: Vec<i64>) -> Result<PathBuf> {
+fn generate(template_file_path: &Path, q: i64, pk: Vec<i64>) -> Result<PathBuf> {
     println!("=== Generating Circom File from Template ===\n");
     let circom_file_path = template_file_path.with_extension("circom");
-    generate_circom(&circom_file_path, template_file_path, pk)?;
+    generate_circom(&circom_file_path, template_file_path, q, pk)?;
     println!("Generated Circom file: {}\n", circom_file_path.display());
     Ok(circom_file_path)
 }
