@@ -5,7 +5,7 @@ use std::fs::File;
 use std::io::Write;
 use std::path::Path;
 
-pub fn generate_circom(output_path: &Path, template_path: &Path, pk: Vec<u8>) -> Result<()> {
+pub fn generate_circom(output_path: &Path, template_path: &Path, pk: Vec<i64>) -> Result<()> {
     let mut handlebars = Handlebars::new();
     handlebars.register_template_file("template", template_path)?;
 
@@ -30,10 +30,7 @@ mod test {
     fn test_generate_template() {
         let output_path = Path::new("src/circom/examples/test.circom");
         let template_path = Path::new("src/circom/examples/test.hbs");
-        let mut rng = rand::thread_rng();
-        let mut pk_vec = vec![0u8; 3];
-        rng.fill_bytes(&mut pk_vec);
-        generate_from_template(output_path, template_path, pk_vec).unwrap();
+        let pk = vec![1, 2, 3];
+        generate_circom(output_path, template_path, pk).unwrap();
     }
 }
-

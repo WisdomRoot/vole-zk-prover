@@ -1,10 +1,12 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
-use rand::thread_rng;
-use rand::RngCore;
+use rand::{thread_rng, Rng};
+use regex::Regex;
+use serde::Deserialize;
 use std::{
-    fs::File,
-    io::BufReader,
+    collections::BTreeMap,
+    fs::{self, File},
+    io::{BufReader, Write},
     path::{Path, PathBuf},
     process::Command,
     time::Instant,
@@ -49,6 +51,8 @@ enum Commands {
         #[clap(flatten)]
         optimization: Optimization,
     },
+    /// Parse falcon-512-nist.toml and generate input.json
+    Falcon,
 }
 
 #[derive(Parser, Debug)]
@@ -91,6 +95,89 @@ impl std::fmt::Display for OptimizationLevel {
     }
 }
 
+#[derive(Debug, Deserialize)]
+struct FalconCases {
+    cases: Vec<FalconCase>,
+}
+
+#[derive(Debug, Deserialize)]
+struct FalconCase {
+    #[serde(rename = "N")]
+    _N: usize,
+    pk: String,
+    s1: String,
+    s2: String,
+    hm: String,
+    c: String,
+}
+
+fn parse_poly(poly: &str) -> Vec<(u32, i64)> {
+    let mut terms = Vec::new();
+
+    if !poly.is_empty() {
+        // Regex to match terms in a polynomial
+        let re = Regex::new(
+            r"(?ix)
+              (?P<sign>[+-]?)            # optional sign
+              \s*                        # optional space
+              (?P<coef>\d+)?             # optional coefficient (default 1)
+              \s*                        # optional space
+              (?P<var>x)?                # optional variable 'x'
+              \s*                        # optional space
+              (?:\^ (?P<exp>\d+))?       # optional exponent
+              \s*                        # optional space
+            ",
+        )
+        .unwrap();
+
+        for cap in re.captures_iter(poly) {
+            let coef: i64 = {
+                let sign = cap
+                    .name("sign")
+                    .map_or(1, |m| if m.as_str() == "-" { -1 } else { 1 });
+                let base: i64 = cap
+                    .name("coef")
+                    .map_or(1, |m| m.as_str().parse().unwrap_or(1));
+                sign * base
+            };
+
+            let exp: u32 = cap.name("var").map_or(0, |_| {
+                cap.name("exp")
+                    .map_or(1, |m| m.as_str().parse().unwrap_or(1))
+            });
+
+            terms.push((exp, coef))
+        }
+
+        terms.sort_by_key(|&(exp, _)| exp);
+    }
+    terms
+}
+
+fn to_vec<T>(poly: &Vec<(u32, i64)>, n: usize) -> Vec<T>
+where
+    T: From<i64> + Default + Clone,
+{
+    let mut vec = vec![T::default(); n];
+    for &(exp, coef) in poly {
+        if (exp as usize) < n {
+            vec[exp as usize] = T::from(coef);
+        }
+    }
+    vec
+}
+
+fn to_string_vec(poly: &Vec<(u32, i64)>, n: usize) -> Vec<String> {
+    to_vec(poly, n)
+        .into_iter()
+        .map(|x: i64| x.to_string())
+        .collect()
+}
+
+fn to_i64_vec(poly: &Vec<(u32, i64)>, n: usize) -> Vec<i64> {
+    to_vec(poly, n)
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
@@ -113,15 +200,57 @@ fn main() -> Result<()> {
             optimization,
         } => {
             let template_file_path = PathBuf::from(template_file);
-            let circom_file_path = generate(&template_file_path, *n)?;
+            let mut rng = thread_rng();
+            let pk: Vec<i64> = (0..*n).map(|_| rng.gen()).collect();
+            let circom_file_path = generate(&template_file_path, pk)?;
             let r1cs_file_path = compile(&circom_file_path, optimization.level())?;
             parse(&r1cs_file_path)
+        }
+        Commands::Falcon => {
+            let toml_str = fs::read_to_string("src/bin/falcon-512-nist.toml")?;
+            let falcon_cases: FalconCases = toml::from_str(&toml_str)?;
+            let first_case = &falcon_cases.cases[0];
+
+            println!("{}", first_case._N);
+            let pk = to_i64_vec(&parse_poly(&first_case.pk), first_case._N);
+            let s1 = to_string_vec(&parse_poly(&first_case.s1), first_case._N);
+            let s2 = to_string_vec(&parse_poly(&first_case.s2), first_case._N);
+            let h = to_string_vec(&parse_poly(&first_case.hm), first_case._N);
+            let c = to_string_vec(&parse_poly(&first_case.c), first_case._N);
+
+            let mut output_map = BTreeMap::new();
+            output_map.insert("s1", s1);
+            output_map.insert("s2", s2);
+            output_map.insert("c", c);
+            output_map.insert("h", h);
+
+            let json_str = serde_json::to_string_pretty(&output_map)?;
+            let mut file = File::create("src/circom/examples/input.json")?;
+            file.write_all(json_str.as_bytes())?;
+
+            println!("Successfully wrote to src/circom/examples/input.json");
+
+            // Pass pk_raw to generate function
+            let template_file_path = PathBuf::from("src/circom/examples/test.hbs");
+            let circom_file_path = generate(&template_file_path, pk)?;
+            let r1cs_file_path = compile(
+                &circom_file_path,
+                Optimization {
+                    o0: false,
+                    o1: true,
+                    o2: false,
+                }
+                .level(),
+            )?;
+            parse(&r1cs_file_path)?;
+
+            Ok(())
         }
     }
 }
 
 fn parse(r1cs_file_path: &Path) -> Result<()> {
-    println!("=== Parsing R1CS File ===\n");
+    println!("=== Parsing R1CS File ===\n ");
     let file = File::open(r1cs_file_path).context(format!(
         "Could not open R1CS file: {}",
         r1cs_file_path.display()
@@ -145,6 +274,7 @@ fn compile(circom_file_path: &Path, optimization_level: OptimizationLevel) -> Re
     let output = Command::new("circom")
         .arg(circom_file_path)
         .arg("--r1cs")
+        .arg("--wasm")
         .arg(format!("--{}", optimization_level))
         .arg("-o")
         .arg(output_dir)
@@ -172,14 +302,10 @@ fn compile(circom_file_path: &Path, optimization_level: OptimizationLevel) -> Re
     Ok(r1cs_file_path)
 }
 
-fn generate(template_file_path: &Path, n: usize) -> Result<PathBuf> {
+fn generate(template_file_path: &Path, pk: Vec<i64>) -> Result<PathBuf> {
     println!("=== Generating Circom File from Template ===\n");
-    let mut rng = thread_rng();
-    let mut pk_vec = vec![0u8; n];
     let circom_file_path = template_file_path.with_extension("circom");
-    rng.fill_bytes(&mut pk_vec);
-    println!("pk_vec: {:?}", pk_vec);
-    generate_circom(&circom_file_path, template_file_path, pk_vec)?;
+    generate_circom(&circom_file_path, template_file_path, pk)?;
     println!("Generated Circom file: {}\n", circom_file_path.display());
     Ok(circom_file_path)
 }

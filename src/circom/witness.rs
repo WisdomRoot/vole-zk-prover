@@ -1,6 +1,6 @@
 use anyhow::{bail, Error};
-use std::io::Read;
 use byteorder::{LittleEndian, ReadBytesExt};
+use std::io::Read;
 
 use crate::{FVec, Fr};
 
@@ -38,7 +38,9 @@ pub fn wtns_from_reader<R: Read>(mut reader: R) -> Result<FVec<Fr>, Error> {
     }
     let mut prime = vec![0u8; field_size as usize];
     reader.read_exact(&mut prime)?;
-    if prime != hex::decode("010000f093f5e1439170b97948e833285d588181b64550b829a031e1724e6430").unwrap() {
+    if prime
+        != hex::decode("010000f093f5e1439170b97948e833285d588181b64550b829a031e1724e6430").unwrap()
+    {
         bail!("invalid curve prime {:?}", prime);
     }
     let witness_len = reader.read_u32::<LittleEndian>()?;
@@ -52,22 +54,21 @@ pub fn wtns_from_reader<R: Read>(mut reader: R) -> Result<FVec<Fr>, Error> {
         bail!("invalid witness section size {}", sec_size);
     }
 
-    Ok(
-        FVec::<Fr>(read_fr_vec(reader, witness_len as usize))
-    )
+    Ok(FVec::<Fr>(read_fr_vec(reader, witness_len as usize)))
 }
 
 #[cfg(test)]
 mod test {
-    use std::{fs::{self, File}, io::BufReader};
+    use std::{fs::File, io::BufReader};
 
     use super::*;
     #[test]
     fn read_wtns_file() {
         let file = File::open("src/circom/examples/witness.wtns").unwrap();
-        let mut buf_reader = BufReader::new(file);
+        let buf_reader = BufReader::new(file);
         let witness = wtns_from_reader(buf_reader).unwrap();
         println!("Witness\n{:?}", witness.0);
         println!("Witness\n{}", witness);
     }
 }
+
