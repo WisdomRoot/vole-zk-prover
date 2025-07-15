@@ -51,14 +51,21 @@ enum Commands {
         #[clap(flatten)]
         optimization: Optimization,
     },
-    /// Parse falcon-512-nist.toml and generate input.json
+    /// Generate the Falcon R1CS circuit and run tests with the given test cases.
+    ///
+    /// If no case is specified, all cases from the input file will be run.
     Falcon {
         /// Path to the directory containing input and output files.
         #[arg(default_value = "src/circom/examples")]
-        path: PathBuf,
+        dir: PathBuf,
         /// Path to the .toml file to parse.
-        #[arg(default_value = "src/bin/falcon-512-nist.toml")]
-        toml_file: PathBuf,
+        #[arg(long, default_value = "src/bin/falcon.toml")]
+        input: PathBuf,
+        /// The case index to use from the .toml file.
+        #[arg(long)]
+        case: Option<usize>,
+        #[clap(flatten)]
+        optimization: Optimization,
     },
 }
 
@@ -210,76 +217,93 @@ fn main() -> Result<()> {
             let r1cs_file_path = compile(&circom_file_path, optimization.level())?;
             parse(&r1cs_file_path)
         }
-        Commands::Falcon { path, toml_file } => {
-            let toml_str = fs::read_to_string(toml_file)?;
+        Commands::Falcon {
+            dir,
+            input,
+            case,
+            optimization,
+        } => {
+            let toml_str = fs::read_to_string(input)?;
             let falcon_cases: FalconCases = toml::from_str(&toml_str)?;
-            let first_case = &falcon_cases.cases[2];
 
-            let pk = to_i64_vec(&parse_poly(&first_case.pk), first_case.n);
-            let s1 = to_string_vec(&parse_poly(&first_case.s1), first_case.n);
-            let s2 = to_string_vec(&parse_poly(&first_case.s2), first_case.n);
-            let h = to_string_vec(&parse_poly(&first_case.h), first_case.n);
-            let c = to_string_vec(&parse_poly(&first_case.c), first_case.n);
-
-            let input_json_path = path.join("input.json");
-
-            println!("=== Generating input.json ===\n");
-            let mut output_map = BTreeMap::new();
-            output_map.insert("s1", s1);
-            output_map.insert("s2", s2);
-            output_map.insert("c", c);
-            output_map.insert("h", h);
-
-            let json_str = serde_json::to_string_pretty(&output_map)?;
-            let mut file = File::create(&input_json_path)?;
-            file.write_all(json_str.as_bytes())?;
-
-            println!("Successfully wrote to {}\n", input_json_path.display());
-
-            // Pass pk_raw to generate function
-            let template_file_path = path.join("test.hbs");
-            let circom_file_path = generate(&template_file_path, first_case.q, pk)?;
-            let r1cs_file_path = compile(
-                &circom_file_path,
-                Optimization {
-                    o0: false,
-                    o1: true,
-                    o2: false,
+            if let Some(case_index) = case {
+                let case = &falcon_cases.cases[*case_index];
+                run_falcon_case(dir, case, *case_index, optimization.level())?;
+            } else {
+                for (i, case) in falcon_cases.cases.iter().enumerate() {
+                    run_falcon_case(dir, case, i, optimization.level())?;
                 }
-                .level(),
-            )?;
-            parse(&r1cs_file_path)?;
-
-            // Run the witness generation command
-            let generate_witness_js_path = PathBuf::from("test_js/generate_witness.js");
-            let test_wasm_path = PathBuf::from("test_js/test.wasm");
-            let witness_wtns_path = PathBuf::from("witness.wtns");
-
-            println!("=== Generating Witness ===\n");
-            let start_time = Instant::now();
-            let output = Command::new("node")
-                .current_dir(path)
-                .arg(&generate_witness_js_path)
-                .arg(&test_wasm_path)
-                .arg(&input_json_path.file_name().unwrap())
-                .arg(&witness_wtns_path)
-                .output()
-                .context("Failed to execute node command for witness generation. Is Node.js installed and in your PATH?")?;
-            let elapsed_time = start_time.elapsed();
-
-            if !output.status.success() {
-                eprintln!("Error during witness generation:");
-                eprintln!("{}", String::from_utf8_lossy(&output.stderr));
-                anyhow::bail!("Witness generation failed");
             }
-            println!(
-                "Witness generation successful in {:.2?}s.\n",
-                elapsed_time.as_secs()
-            );
 
             Ok(())
         }
     }
+}
+
+fn run_falcon_case(
+    dir: &Path,
+    case: &FalconCase,
+    case_index: usize,
+    optimization_level: OptimizationLevel,
+) -> Result<()> {
+    println!("=== Running Falcon Case {} ===\n", case_index);
+    let pk = to_i64_vec(&parse_poly(&case.pk), case.n);
+    let s1 = to_string_vec(&parse_poly(&case.s1), case.n);
+    let s2 = to_string_vec(&parse_poly(&case.s2), case.n);
+    let h = to_string_vec(&parse_poly(&case.h), case.n);
+    let c = to_string_vec(&parse_poly(&case.c), case.n);
+
+    let input_json_path = dir.join(format!("input_{}.json", case_index));
+
+    println!("=== Generating input.json ===\n");
+    let mut output_map = BTreeMap::new();
+    output_map.insert("s1", s1);
+    output_map.insert("s2", s2);
+    output_map.insert("c", c);
+    output_map.insert("h", h);
+
+    let json_str = serde_json::to_string_pretty(&output_map)?;
+    let mut file = File::create(&input_json_path)?;
+    file.write_all(json_str.as_bytes())?;
+
+    println!("Successfully wrote to {}\n", input_json_path.display());
+
+    // Pass pk_raw to generate function
+    let template_file_path = dir.join("test.hbs");
+    let circom_file_path = generate(&template_file_path, case.q, pk)?;
+    let r1cs_file_path = compile(&circom_file_path, optimization_level)?;
+    parse(&r1cs_file_path)?;
+
+    // Run the witness generation command
+    let generate_witness_js_path = PathBuf::from("test_js/generate_witness.js");
+    let test_wasm_path = PathBuf::from("test_js/test.wasm");
+    let witness_wtns_path = PathBuf::from(format!("witness_{}.wtns", case_index));
+
+    println!("=== Generating Witness ===\n");
+    let start_time = Instant::now();
+    let output = Command::new("node")
+        .current_dir(dir)
+        .arg(&generate_witness_js_path)
+        .arg(&test_wasm_path)
+        .arg(&input_json_path.file_name().unwrap())
+        .arg(&witness_wtns_path)
+        .output()
+        .context(
+            "Failed to execute node command for witness generation. Is Node.js installed and in your PATH?",
+        )?;
+    let elapsed_time = start_time.elapsed();
+
+    if !output.status.success() {
+        eprintln!("Error during witness generation:");
+        eprintln!("{}", String::from_utf8_lossy(&output.stderr));
+        anyhow::bail!("Witness generation failed");
+    }
+    println!(
+        "Witness generation successful in {:.2?}s.\n",
+        elapsed_time.as_secs()
+    );
+
+    Ok(())
 }
 
 fn parse(r1cs_file_path: &Path) -> Result<()> {
