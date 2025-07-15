@@ -16,7 +16,6 @@ use std::{
 };
 
 use num_bigint::{BigInt, BigUint, Sign};
-use num_traits::Zero;
 use rand::rngs::ThreadRng;
 use serde::{Deserialize, Serialize};
 

@@ -1,6 +1,5 @@
 //! Borrowed extensively from Nova Scotia https://github.com/nalinbhardwaj/Nova-Scotia/
 
-use crate::ff::PrimeField;
 use anyhow::{bail, Error};
 use byteorder::{LittleEndian, ReadBytesExt};
 use itertools::Itertools;
