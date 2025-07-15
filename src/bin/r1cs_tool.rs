@@ -27,13 +27,13 @@ enum Commands {
     Parse {
         /// Path to the .r1cs file to parse.
         #[arg(default_value = "src/circom/examples/test.r1cs")]
-        r1cs_file: String,
+        r1cs_file: PathBuf,
     },
     /// Compile a Circom file and parse the output
     Compile {
         /// Path to the .circom file to compile.
         #[arg(default_value = "src/circom/examples/test.circom")]
-        circom_file: String,
+        circom_file: PathBuf,
 
         #[clap(flatten)]
         optimization: Optimization,
@@ -42,7 +42,7 @@ enum Commands {
     Generate {
         /// Path to the template file to generate the Circom file from.
         #[arg(default_value = "src/circom/examples/test.hbs")]
-        template_file: String,
+        template_file: PathBuf,
 
         /// The size of pk.
         #[arg(long, default_value_t = 512)]
@@ -55,10 +55,10 @@ enum Commands {
     Falcon {
         /// Path to the directory containing input and output files.
         #[arg(default_value = "src/circom/examples")]
-        path: String,
+        path: PathBuf,
         /// Path to the .toml file to parse.
         #[arg(default_value = "src/bin/falcon-512-nist.toml")]
-        toml_file: String,
+        toml_file: PathBuf,
     },
 }
 
@@ -191,16 +191,12 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match &cli.command {
-        Commands::Parse { r1cs_file } => {
-            let r1cs_file_path = PathBuf::from(r1cs_file);
-            parse(&r1cs_file_path)
-        }
+        Commands::Parse { r1cs_file } => parse(r1cs_file),
         Commands::Compile {
             circom_file,
             optimization,
         } => {
-            let circom_file_path = PathBuf::from(circom_file);
-            let r1cs_file_path = compile(&circom_file_path, optimization.level())?;
+            let r1cs_file_path = compile(circom_file, optimization.level())?;
             parse(&r1cs_file_path)
         }
         Commands::Generate {
@@ -208,10 +204,9 @@ fn main() -> Result<()> {
             n,
             optimization,
         } => {
-            let template_file_path = PathBuf::from(template_file);
             let mut rng = thread_rng();
             let pk: Vec<i64> = (0..*n).map(|_| rng.gen()).collect();
-            let circom_file_path = generate(&template_file_path, 12289, pk)?;
+            let circom_file_path = generate(template_file, 12289, pk)?;
             let r1cs_file_path = compile(&circom_file_path, optimization.level())?;
             parse(&r1cs_file_path)
         }
@@ -226,8 +221,7 @@ fn main() -> Result<()> {
             let h = to_string_vec(&parse_poly(&first_case.h), first_case.n);
             let c = to_string_vec(&parse_poly(&first_case.c), first_case.n);
 
-            let base_path = PathBuf::from(path);
-            let input_json_path = base_path.join("input.json");
+            let input_json_path = path.join("input.json");
 
             println!("=== Generating input.json ===\n");
             let mut output_map = BTreeMap::new();
@@ -243,7 +237,7 @@ fn main() -> Result<()> {
             println!("Successfully wrote to {}\n", input_json_path.display());
 
             // Pass pk_raw to generate function
-            let template_file_path = base_path.join("test.hbs");
+            let template_file_path = path.join("test.hbs");
             let circom_file_path = generate(&template_file_path, first_case.q, pk)?;
             let r1cs_file_path = compile(
                 &circom_file_path,
@@ -264,7 +258,7 @@ fn main() -> Result<()> {
             println!("=== Generating Witness ===\n");
             let start_time = Instant::now();
             let output = Command::new("node")
-                .current_dir(&base_path)
+                .current_dir(path)
                 .arg(&generate_witness_js_path)
                 .arg(&test_wasm_path)
                 .arg(&input_json_path.file_name().unwrap())
