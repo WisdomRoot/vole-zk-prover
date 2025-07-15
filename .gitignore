@@ -2,6 +2,9 @@
 src/circom/examples/*.r1cs
 src/circom/examples/*.wtns
 src/circom/examples/test.r1cs
+src/circom/examples/*.circom
+src/circom/examples/test_js
+src/circom/examples/input.json
 *.r1cs
 *.wtns
 test.r1cs
