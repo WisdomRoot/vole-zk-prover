@@ -213,7 +213,7 @@ fn main() -> Result<()> {
         } => {
             let mut rng = thread_rng();
             let pk: Vec<i64> = (0..*n).map(|_| rng.gen()).collect();
-            let circom_file_path = generate(template_file, 12289, pk)?;
+            let circom_file_path = generate(template_file, None, 12289, pk)?;
             let r1cs_file_path = compile(&circom_file_path, optimization.level())?;
             parse(&r1cs_file_path)
         }
@@ -269,14 +269,23 @@ fn run_falcon_case(
     println!("Successfully wrote to {}\n", input_json_path.display());
 
     // Pass pk_raw to generate function
-    let template_file_path = dir.join("test.hbs");
-    let circom_file_path = generate(&template_file_path, case.q, pk)?;
+    let file_stem = "test";
+    let template_file_path = dir.join(format!("{file_stem}.hbs"));
+    let circom_file_path = generate(
+        &template_file_path,
+        Some(dir.join(format!("{}_{}.circom", file_stem, case_index))),
+        case.q,
+        pk,
+    )?;
     let r1cs_file_path = compile(&circom_file_path, optimization_level)?;
     parse(&r1cs_file_path)?;
 
     // Run the witness generation command
-    let generate_witness_js_path = PathBuf::from("test_js/generate_witness.js");
-    let test_wasm_path = PathBuf::from("test_js/test.wasm");
+    let generate_witness_js_path =
+        PathBuf::from(format!("{file_stem}_{case_index}_js/generate_witness.js"));
+    let test_wasm_path = PathBuf::from(format!(
+        "{file_stem}_{case_index}_js/{file_stem}_{case_index}.wasm"
+    ));
     let witness_wtns_path = PathBuf::from(format!("witness_{}.wtns", case_index));
 
     println!("=== Generating Witness ===\n");
@@ -359,9 +368,18 @@ fn compile(circom_file_path: &Path, optimization_level: OptimizationLevel) -> Re
     Ok(r1cs_file_path)
 }
 
-fn generate(template_file_path: &Path, q: i64, pk: Vec<i64>) -> Result<PathBuf> {
+fn generate(
+    template_file_path: &Path,
+    output_path: Option<PathBuf>,
+    q: i64,
+    pk: Vec<i64>,
+) -> Result<PathBuf> {
     println!("=== Generating Circom File from Template ===\n");
-    let circom_file_path = template_file_path.with_extension("circom");
+    let circom_file_path = if let Some(output_path) = output_path {
+        output_path
+    } else {
+        template_file_path.with_extension("circom")
+    };
     generate_circom(&circom_file_path, template_file_path, q, pk)?;
     println!("Generated Circom file: {}\n", circom_file_path.display());
     Ok(circom_file_path)

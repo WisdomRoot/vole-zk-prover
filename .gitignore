@@ -3,7 +3,7 @@ src/circom/examples/*.r1cs
 src/circom/examples/*.wtns
 src/circom/examples/test.r1cs
 src/circom/examples/*.circom
-src/circom/examples/test_js
+src/circom/examples/*_js
 src/circom/examples/*.json
 *.r1cs
 *.wtns
