@@ -55,9 +55,9 @@ enum Commands {
     ///
     /// If no case is specified, all cases from the input file will be run.
     Falcon {
-        /// Path to the directory containing input and output files.
-        #[arg(default_value = "src/circom/examples")]
-        dir: PathBuf,
+        /// Path to the template file to generate the Circom file from.
+        #[arg(default_value = "src/circom/examples/falcon.hbs")]
+        template_file: PathBuf,
         /// Path to the .toml file to parse.
         #[arg(long, default_value = "src/bin/falcon.toml")]
         input: PathBuf,
@@ -203,7 +203,7 @@ fn main() -> Result<()> {
             circom_file,
             optimization,
         } => {
-            let r1cs_file_path = compile(circom_file, None, optimization.level())?;
+            let r1cs_file_path = compile(circom_file, optimization.level())?;
             parse(&r1cs_file_path)
         }
         Commands::Generate {
@@ -214,11 +214,11 @@ fn main() -> Result<()> {
             let mut rng = thread_rng();
             let pk: Vec<i64> = (0..*n).map(|_| rng.gen()).collect();
             let circom_file_path = generate(template_file, None, 12289, pk)?;
-            let r1cs_file_path = compile(&circom_file_path, None, optimization.level())?;
+            let r1cs_file_path = compile(&circom_file_path, optimization.level())?;
             parse(&r1cs_file_path)
         }
         Commands::Falcon {
-            dir,
+            template_file,
             input,
             case,
             optimization,
@@ -228,10 +228,10 @@ fn main() -> Result<()> {
 
             if let Some(case_index) = case {
                 let case = &falcon_cases.cases[*case_index];
-                run_falcon_case(dir, case, *case_index, optimization.level())?;
+                run_falcon_case(template_file, case, *case_index, optimization.level())?;
             } else {
                 for (i, case) in falcon_cases.cases.iter().enumerate() {
-                    run_falcon_case(dir, case, i, optimization.level())?;
+                    run_falcon_case(template_file, case, i, optimization.level())?;
                 }
             }
 
@@ -241,7 +241,7 @@ fn main() -> Result<()> {
 }
 
 fn run_falcon_case(
-    dir: &Path,
+    template_file: &Path,
     case: &FalconCase,
     case_index: usize,
     optimization_level: OptimizationLevel,
@@ -253,10 +253,18 @@ fn run_falcon_case(
     let h = to_string_vec(&parse_poly(&case.h), case.n);
     let c = to_string_vec(&parse_poly(&case.c), case.n);
 
-    let file_stem = "falcon";
-    let artifact_dir_name = format!("{}_{}", file_stem, case_index);
-    let artifact_dir = dir.join(artifact_dir_name);
-    fs::create_dir_all(&artifact_dir)?;
+    let file_stem = template_file.file_stem().unwrap().to_str().unwrap();
+    let dir = template_file.parent().unwrap();
+
+    let circom_file_path = generate(
+        template_file,
+        Some(dir.join(format!("{}_{}.circom", file_stem, case_index))),
+        case.q,
+        pk,
+    )?;
+
+    let r1cs_file_path = compile(&circom_file_path, optimization_level)?;
+    let artifact_dir = r1cs_file_path.parent().unwrap();
 
     let input_json_path = artifact_dir.join(format!("input_{}.json", case_index));
 
@@ -273,18 +281,9 @@ fn run_falcon_case(
 
     println!("Successfully wrote to {}\n", input_json_path.display());
 
-    // Pass pk_raw to generate function
-    let template_file_path = dir.join(format!("{file_stem}.hbs"));
-    let circom_file_path = generate(
-        &template_file_path,
-        Some(dir.join(format!("{}_{}.circom", file_stem, case_index))),
-        case.q,
-        pk,
-    )?;
-    let r1cs_file_path = compile(&circom_file_path, Some(&artifact_dir), optimization_level)?;
     parse(&r1cs_file_path)?;
 
-    generate_witness(dir, &artifact_dir, file_stem, case_index, &input_json_path)?;
+    generate_witness(&artifact_dir, file_stem, case_index, &input_json_path)?;
 
     Ok(())
 }
@@ -301,19 +300,10 @@ fn parse(r1cs_file_path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn compile(
-    circom_file_path: &Path,
-    output_dir_opt: Option<&Path>,
-    optimization_level: OptimizationLevel,
-) -> Result<PathBuf> {
-    let output_dir = match output_dir_opt {
-        Some(dir) => dir.to_path_buf(),
-        None => {
-            let circom_file_stem = circom_file_path.file_stem().unwrap().to_str().unwrap();
-            let parent_dir = circom_file_path.parent().unwrap();
-            parent_dir.join(circom_file_stem)
-        }
-    };
+fn compile(circom_file_path: &Path, optimization_level: OptimizationLevel) -> Result<PathBuf> {
+    let circom_file_stem = circom_file_path.file_stem().unwrap().to_str().unwrap();
+    let parent_dir = circom_file_path.parent().unwrap();
+    let output_dir = parent_dir.join(circom_file_stem);
 
     fs::create_dir_all(&output_dir)?;
 
@@ -373,12 +363,12 @@ fn generate(
 }
 
 fn generate_witness(
-    dir: &Path,
     artifact_dir: &Path,
     file_stem: &str,
     case_index: usize,
     input_json_path: &Path,
 ) -> Result<()> {
+    let dir = artifact_dir.parent().unwrap();
     // Run the witness generation command
     let generate_witness_js_path = artifact_dir.strip_prefix(dir).unwrap().join(format!(
         "{}_{}_js/generate_witness.js",
@@ -420,3 +410,4 @@ fn generate_witness(
 
     Ok(())
 }
+
