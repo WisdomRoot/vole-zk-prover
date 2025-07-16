@@ -203,7 +203,7 @@ fn main() -> Result<()> {
             circom_file,
             optimization,
         } => {
-            let r1cs_file_path = compile(circom_file, optimization.level())?;
+            let r1cs_file_path = compile(circom_file, None, optimization.level())?;
             parse(&r1cs_file_path)
         }
         Commands::Generate {
@@ -214,7 +214,7 @@ fn main() -> Result<()> {
             let mut rng = thread_rng();
             let pk: Vec<i64> = (0..*n).map(|_| rng.gen()).collect();
             let circom_file_path = generate(template_file, None, 12289, pk)?;
-            let r1cs_file_path = compile(&circom_file_path, optimization.level())?;
+            let r1cs_file_path = compile(&circom_file_path, None, optimization.level())?;
             parse(&r1cs_file_path)
         }
         Commands::Falcon {
@@ -253,7 +253,12 @@ fn run_falcon_case(
     let h = to_string_vec(&parse_poly(&case.h), case.n);
     let c = to_string_vec(&parse_poly(&case.c), case.n);
 
-    let input_json_path = dir.join(format!("input_{}.json", case_index));
+    let file_stem = "falcon";
+    let artifact_dir_name = format!("{}_{}", file_stem, case_index);
+    let artifact_dir = dir.join(artifact_dir_name);
+    fs::create_dir_all(&artifact_dir)?;
+
+    let input_json_path = artifact_dir.join(format!("input_{}.json", case_index));
 
     println!("=== Generating input.json ===\n");
     let mut output_map = BTreeMap::new();
@@ -269,7 +274,6 @@ fn run_falcon_case(
     println!("Successfully wrote to {}\n", input_json_path.display());
 
     // Pass pk_raw to generate function
-    let file_stem = "falcon";
     let template_file_path = dir.join(format!("{file_stem}.hbs"));
     let circom_file_path = generate(
         &template_file_path,
@@ -277,16 +281,23 @@ fn run_falcon_case(
         case.q,
         pk,
     )?;
-    let r1cs_file_path = compile(&circom_file_path, optimization_level)?;
+    let r1cs_file_path = compile(&circom_file_path, Some(&artifact_dir), optimization_level)?;
     parse(&r1cs_file_path)?;
 
     // Run the witness generation command
-    let generate_witness_js_path =
-        PathBuf::from(format!("{file_stem}_{case_index}_js/generate_witness.js"));
-    let test_wasm_path = PathBuf::from(format!(
-        "{file_stem}_{case_index}_js/{file_stem}_{case_index}.wasm"
+    let generate_witness_js_path = artifact_dir.strip_prefix(dir).unwrap().join(format!(
+        "{}_{}_js/generate_witness.js",
+        file_stem, case_index
     ));
-    let witness_wtns_path = PathBuf::from(format!("witness_{}.wtns", case_index));
+    let test_wasm_path = artifact_dir.strip_prefix(dir).unwrap().join(format!(
+        "{}_{}_js/{}_{}.wasm",
+        file_stem, case_index, file_stem, case_index
+    ));
+    let witness_wtns_path = artifact_dir
+        .strip_prefix(dir)
+        .unwrap()
+        .join(format!("witness_{}.wtns", case_index));
+    let input_json_rel_path = input_json_path.strip_prefix(dir).unwrap();
 
     println!("=== Generating Witness ===\n");
     let start_time = Instant::now();
@@ -294,7 +305,7 @@ fn run_falcon_case(
         .current_dir(dir)
         .arg(&generate_witness_js_path)
         .arg(&test_wasm_path)
-        .arg(&input_json_path.file_name().unwrap())
+        .arg(input_json_rel_path)
         .arg(&witness_wtns_path)
         .output()
         .context(
@@ -327,13 +338,28 @@ fn parse(r1cs_file_path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn compile(circom_file_path: &Path, optimization_level: OptimizationLevel) -> Result<PathBuf> {
-    let output_dir = circom_file_path.parent().unwrap_or_else(|| Path::new("."));
+fn compile(
+    circom_file_path: &Path,
+    output_dir_opt: Option<&Path>,
+    optimization_level: OptimizationLevel,
+) -> Result<PathBuf> {
+    let output_dir = match output_dir_opt {
+        Some(dir) => dir.to_path_buf(),
+        None => {
+            let circom_file_stem = circom_file_path.file_stem().unwrap().to_str().unwrap();
+            let parent_dir = circom_file_path.parent().unwrap();
+            parent_dir.join(circom_file_stem)
+        }
+    };
+
+    fs::create_dir_all(&output_dir)?;
+
     println!("=== Compiling Circom File ===\n");
     println!(
-        "Compiling {} with optimization {}...",
+        "Compiling {} with optimization {}... Outputting to {}",
         circom_file_path.display(),
-        optimization_level
+        optimization_level,
+        output_dir.display()
     );
 
     let start_time = Instant::now();
@@ -343,7 +369,7 @@ fn compile(circom_file_path: &Path, optimization_level: OptimizationLevel) -> Re
         .arg("--wasm")
         .arg(format!("--{}", optimization_level))
         .arg("-o")
-        .arg(output_dir)
+        .arg(&output_dir)
         .output()
         .context("Failed to execute circom command. Is circom installed and in your PATH?")?;
     let elapsed_time = start_time.elapsed();
