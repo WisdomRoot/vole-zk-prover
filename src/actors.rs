@@ -2,8 +2,9 @@
 pub mod actors {
     // use std::time::Instant;
     use anyhow::{anyhow, Error, Ok};
+    use std::mem;
 
-    use crate::{
+    use crate::{DataSize,
         challenges::{calc_other_challenges, calc_quicksilver_challenge, challenge_from_seed},
         smallvole::{self},
         subspacevole::{calc_consistency_check, LinearCode, RAAACode},
@@ -88,6 +89,60 @@ pub mod actors {
     pub struct CommitAndProof<T: PF> {
         pub commitment: ProverCommitment<T>,
         pub proof: Proof<T>,
+    }
+
+    impl<T: PF> DataSize for CommitAndProof<T> {
+        fn size_in_bytes(&self) -> usize {
+            self.commitment.size_in_bytes() + self.proof.size_in_bytes()
+        }
+    }
+
+    impl<T: PF> DataSize for ProverCommitment<T> {
+        fn size_in_bytes(&self) -> usize {
+            self.seed_comm.size_in_bytes()
+                + self.witness_comm.size_in_bytes()
+                + self.subspace_vole_correction.size_in_bytes()
+                + self.consistency_check.0.size_in_bytes()
+                + self.consistency_check.1.size_in_bytes()
+        }
+    }
+
+    impl<T: PF> DataSize for Proof<T> {
+        fn size_in_bytes(&self) -> usize {
+            self.zkp.size_in_bytes()
+                + self.seed_openings.size_in_bytes()
+                + self.public_openings.size_in_bytes()
+                + self.s_matrix.size_in_bytes()
+                + self.s_consistency_check.size_in_bytes()
+        }
+    }
+
+    impl DataSize for [u8; 32] {
+        fn size_in_bytes(&self) -> usize {
+            mem::size_of_val(self)
+        }
+    }
+
+    
+
+    impl<T: PF> DataSize for ZKP<T> {
+        fn size_in_bytes(&self) -> usize {
+            mem::size_of_val(&self.mul_proof.0) + mem::size_of_val(&self.mul_proof.1)
+        }
+    }
+
+    impl DataSize for SubspaceVOLEOpening {
+        fn size_in_bytes(&self) -> usize {
+            self.seed_opens.iter().map(|s| s.size_in_bytes()).sum::<usize>()
+                + self.seed_proofs.iter().map(|s| s.size_in_bytes()).sum::<usize>()
+        }
+    }
+
+    impl<T: PF> DataSize for PublicOpenings<T> {
+        fn size_in_bytes(&self) -> usize {
+            self.public_inputs.len() * (mem::size_of::<T>() * 2)
+                + self.public_outputs.len() * (mem::size_of::<T>() * 2)
+        }
     }
 
     #[derive(Clone, Debug, Serialize, Deserialize)]

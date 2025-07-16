@@ -1,20 +1,20 @@
 use lazy_static::lazy_static;
-use std::{fs::File, io::BufReader, time::Instant};
+use std::{fs::File, io::BufReader, mem, time::Instant};
 use volonym::{
-    actors::actors::Prover,
+    actors::actors::{CommitAndProof, Prover},
     circom::{r1cs::R1CSFile, witness::wtns_from_reader},
     zkp::R1CSWithMetadata,
-    FVec, Fr,
+    DataSize, FVec, Fr,
 };
 
 lazy_static! {
     pub static ref WITNESS: FVec<Fr> = {
-        let wtns_file = File::open("src/circom/examples/witness.wtns").unwrap();
+        let wtns_file = File::open("src/circom/examples/witness_2.wtns").unwrap();
         let wtns_reader = BufReader::new(wtns_file);
         wtns_from_reader(wtns_reader).unwrap()
     };
     pub static ref CIRCUIT: R1CSWithMetadata<Fr> = {
-        let r1cs_file = File::open("src/circom/examples/test.r1cs").unwrap();
+        let r1cs_file = File::open("src/circom/examples/test_2.r1cs").unwrap();
         let r1cs_reader = BufReader::new(r1cs_file);
         R1CSFile::from_reader(r1cs_reader)
             .unwrap()
@@ -22,17 +22,20 @@ lazy_static! {
     };
 }
 
-fn load_and_prove() {
+fn load_and_prove() -> CommitAndProof<Fr> {
     let mut prover = Prover::from_witness_and_circuit_unpadded(WITNESS.clone(), CIRCUIT.clone());
-    let _vole_comm = prover.mkvole().unwrap();
-    let _proof = prover.prove().unwrap();
+    prover.commit_and_prove().unwrap()
 }
 
 use std::time::Duration;
 
 fn main() {
     // Full warm-up run.
-    load_and_prove();
+    let pf = load_and_prove();
+    println!(
+        "proof size: {:.2} MB",
+        pf.size_in_bytes() as f64 / (1024.0 * 1024.0)
+    );
 
     let mut durations = Vec::with_capacity(10);
     for _ in 0..10 {

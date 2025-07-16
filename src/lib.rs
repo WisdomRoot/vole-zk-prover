@@ -12,8 +12,13 @@ pub mod zkp;
 
 use std::{
     fmt::{self, Display},
+    mem,
     ops::{Add, Mul, Neg, Sub, SubAssign},
 };
+
+pub trait DataSize {
+    fn size_in_bytes(&self) -> usize;
+}
 
 use num_bigint::{BigInt, BigUint, Sign};
 use rand::rngs::ThreadRng;
@@ -97,6 +102,13 @@ impl ToU8s for Fr {
     }
 }
 
+/// Data size
+impl<T: PF> DataSize for FVec<T> {
+    fn size_in_bytes(&self) -> usize {
+        self.0.len() * mem::size_of::<T>()
+    }
+}
+
 /// Pretty display
 impl Display for FVec<Fr> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -111,6 +123,14 @@ impl Display for FVec<Fr> {
         )
     }
 }
+
+/// Data size
+impl<T: PF> DataSize for FMatrix<T> {
+    fn size_in_bytes(&self) -> usize {
+        self.0.iter().map(|row| row.size_in_bytes()).sum()
+    }
+}
+
 /// Pretty display
 impl Display for FMatrix<Fr> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

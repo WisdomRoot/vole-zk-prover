@@ -26,13 +26,13 @@ enum Commands {
     /// Parse and display R1CS file contents
     Parse {
         /// Path to the .r1cs file to parse.
-        #[arg(default_value = "src/circom/examples/test.r1cs")]
+        #[arg(default_value = "src/circom/examples/falcon.r1cs")]
         r1cs_file: PathBuf,
     },
     /// Compile a Circom file and parse the output
     Compile {
         /// Path to the .circom file to compile.
-        #[arg(default_value = "src/circom/examples/test.circom")]
+        #[arg(default_value = "src/circom/examples/falcon.circom")]
         circom_file: PathBuf,
 
         #[clap(flatten)]
@@ -41,7 +41,7 @@ enum Commands {
     /// Generate a Circom file from a template, compile it, and parse the output
     Generate {
         /// Path to the template file to generate the Circom file from.
-        #[arg(default_value = "src/circom/examples/test.hbs")]
+        #[arg(default_value = "src/circom/examples/falcon.hbs")]
         template_file: PathBuf,
 
         /// The size of pk.
@@ -269,7 +269,7 @@ fn run_falcon_case(
     println!("Successfully wrote to {}\n", input_json_path.display());
 
     // Pass pk_raw to generate function
-    let file_stem = "test";
+    let file_stem = "falcon";
     let template_file_path = dir.join(format!("{file_stem}.hbs"));
     let circom_file_path = generate(
         &template_file_path,
