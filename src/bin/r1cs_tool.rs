@@ -284,44 +284,7 @@ fn run_falcon_case(
     let r1cs_file_path = compile(&circom_file_path, Some(&artifact_dir), optimization_level)?;
     parse(&r1cs_file_path)?;
 
-    // Run the witness generation command
-    let generate_witness_js_path = artifact_dir.strip_prefix(dir).unwrap().join(format!(
-        "{}_{}_js/generate_witness.js",
-        file_stem, case_index
-    ));
-    let test_wasm_path = artifact_dir.strip_prefix(dir).unwrap().join(format!(
-        "{}_{}_js/{}_{}.wasm",
-        file_stem, case_index, file_stem, case_index
-    ));
-    let witness_wtns_path = artifact_dir
-        .strip_prefix(dir)
-        .unwrap()
-        .join(format!("witness_{}.wtns", case_index));
-    let input_json_rel_path = input_json_path.strip_prefix(dir).unwrap();
-
-    println!("=== Generating Witness ===\n");
-    let start_time = Instant::now();
-    let output = Command::new("node")
-        .current_dir(dir)
-        .arg(&generate_witness_js_path)
-        .arg(&test_wasm_path)
-        .arg(input_json_rel_path)
-        .arg(&witness_wtns_path)
-        .output()
-        .context(
-            "Failed to execute node command for witness generation. Is Node.js installed and in your PATH?",
-        )?;
-    let elapsed_time = start_time.elapsed();
-
-    if !output.status.success() {
-        eprintln!("Error during witness generation:");
-        eprintln!("{}", String::from_utf8_lossy(&output.stderr));
-        anyhow::bail!("Witness generation failed");
-    }
-    println!(
-        "Witness generation successful in {:.2?}s.\n",
-        elapsed_time.as_secs()
-    );
+    generate_witness(dir, &artifact_dir, file_stem, case_index, &input_json_path)?;
 
     Ok(())
 }
@@ -386,10 +349,8 @@ fn compile(
 
     let r1cs_file_name = circom_file_path
         .file_stem()
-        .context("Could not get file stem")?
-        .to_str()
-        .context("Could not convert file stem to string")?;
-    let r1cs_file_path = output_dir.join(format!("{}.r1cs", r1cs_file_name));
+        .context("Could not get file stem")?;
+    let r1cs_file_path = output_dir.join(format!("{}.r1cs", r1cs_file_name.to_str().unwrap()));
 
     Ok(r1cs_file_path)
 }
@@ -409,4 +370,53 @@ fn generate(
     generate_circom(&circom_file_path, template_file_path, q, pk)?;
     println!("Generated Circom file: {}\n", circom_file_path.display());
     Ok(circom_file_path)
+}
+
+fn generate_witness(
+    dir: &Path,
+    artifact_dir: &Path,
+    file_stem: &str,
+    case_index: usize,
+    input_json_path: &Path,
+) -> Result<()> {
+    // Run the witness generation command
+    let generate_witness_js_path = artifact_dir.strip_prefix(dir).unwrap().join(format!(
+        "{}_{}_js/generate_witness.js",
+        file_stem, case_index
+    ));
+    let test_wasm_path = artifact_dir.strip_prefix(dir).unwrap().join(format!(
+        "{}_{}_js/{}_{}.wasm",
+        file_stem, case_index, file_stem, case_index
+    ));
+    let witness_wtns_path = artifact_dir
+        .strip_prefix(dir)
+        .unwrap()
+        .join(format!("witness_{}.wtns", case_index));
+    let input_json_rel_path = input_json_path.strip_prefix(dir).unwrap();
+
+    println!("=== Generating Witness ===\n");
+    let start_time = Instant::now();
+    let output = Command::new("node")
+        .current_dir(dir)
+        .arg(&generate_witness_js_path)
+        .arg(&test_wasm_path)
+        .arg(input_json_rel_path)
+        .arg(&witness_wtns_path)
+        .output()
+        .context(
+            "Failed to execute node command for witness generation. Is Node.js installed and in your PATH?",
+        )?;
+    let elapsed_time = start_time.elapsed();
+
+    if !output.status.success() {
+        eprintln!("Error during witness generation:");
+        eprintln!("{}", String::from_utf8_lossy(&output.stderr));
+        anyhow::bail!("Witness generation failed");
+    }
+    println!(
+        "Witness generation successful in {:.2?}s.\n",
+        elapsed_time.as_secs()
+    );
+
+    Ok(())
 }
