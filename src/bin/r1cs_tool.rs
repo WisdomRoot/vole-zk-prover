@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
+use lazy_static::lazy_static;
 use rand::{thread_rng, Rng};
 use regex::Regex;
 use serde::Deserialize;
@@ -9,16 +10,53 @@ use std::{
     io::{BufReader, Write},
     path::{Path, PathBuf},
     process::Command,
+    sync::Mutex,
     time::Instant,
 };
 use volonym::circom::generator::generate_circom;
 use volonym::circom::r1cs::R1CSFile;
+
+lazy_static! {
+    static ref LOG_FILE: Mutex<Option<File>> = Mutex::new(None);
+}
+
+macro_rules! log_println {
+    ($($arg:tt)*) => {
+        if let Ok(mut guard) = LOG_FILE.lock() {
+            if let Some(file) = &mut *guard {
+                if let Err(e) = writeln!(file, $($arg)*) {
+                    eprintln!("Failed to write to log file: {}", e);
+                }
+            } else {
+                println!($($arg)*);
+            }
+        }
+    };
+}
+
+macro_rules! log_eprintln {
+    ($($arg:tt)*) => {
+        if let Ok(mut guard) = LOG_FILE.lock() {
+            if let Some(file) = &mut *guard {
+                if let Err(e) = writeln!(file, $($arg)*) {
+                    eprintln!("Failed to write to log file: {}", e);
+                }
+            } else {
+                eprintln!($($arg)*);
+            }
+        }
+    };
+}
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
+    /// Log output to a file instead of stdout/stderr.
+    /// The log file will have the same name as the input file, with a .log extension.
+    #[arg(short = 'l', long, global = true)]
+    log: bool,
 }
 
 #[derive(Subcommand, Debug)]
@@ -197,6 +235,22 @@ fn to_i64_vec(poly: &Vec<(u32, i64)>, n: usize) -> Vec<i64> {
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
+    if cli.log {
+        if let Commands::Falcon { .. } = &cli.command {
+            // Falcon handles logging per case
+        } else {
+            let input_path: &Path = match &cli.command {
+                Commands::Parse { r1cs_file } => r1cs_file,
+                Commands::Compile { circom_file, .. } => circom_file,
+                Commands::Generate { template_file, .. } => template_file,
+                _ => unreachable!(),
+            };
+            let log_path = input_path.with_extension("log");
+            let file = File::create(log_path)?;
+            *LOG_FILE.lock().unwrap() = Some(file);
+        }
+    }
+
     match &cli.command {
         Commands::Parse { r1cs_file } => parse(r1cs_file),
         Commands::Compile {
@@ -228,10 +282,16 @@ fn main() -> Result<()> {
 
             if let Some(case_index) = case {
                 let case = &falcon_cases.cases[*case_index];
-                run_falcon_case(template_file, case, *case_index, optimization.level())?;
+                run_falcon_case(
+                    template_file,
+                    case,
+                    *case_index,
+                    optimization.level(),
+                    cli.log,
+                )?;
             } else {
                 for (i, case) in falcon_cases.cases.iter().enumerate() {
-                    run_falcon_case(template_file, case, i, optimization.level())?;
+                    run_falcon_case(template_file, case, i, optimization.level(), cli.log)?;
                 }
             }
 
@@ -245,30 +305,36 @@ fn run_falcon_case(
     case: &FalconCase,
     case_index: usize,
     optimization_level: OptimizationLevel,
+    log: bool,
 ) -> Result<()> {
-    println!("=== Running Falcon Case {} ===\n", case_index);
+    let file_stem = template_file.file_stem().unwrap().to_str().unwrap();
+    let dir = template_file.parent().unwrap();
+    let circom_file_name = format!("{}_{}", file_stem, case_index);
+    let circom_file_path = dir.join(format!("{}.circom", circom_file_name));
+
+    if log {
+        let output_dir = dir.join(&circom_file_name);
+        fs::create_dir_all(&output_dir)?;
+        let log_path = output_dir.join(format!("{}.log", circom_file_name));
+        let file = File::create(log_path)?;
+        *LOG_FILE.lock().unwrap() = Some(file);
+    }
+
+    log_println!("=== Running Falcon Case {} ===\n", case_index);
     let pk = to_i64_vec(&parse_poly(&case.pk), case.n);
     let s1 = to_string_vec(&parse_poly(&case.s1), case.n);
     let s2 = to_string_vec(&parse_poly(&case.s2), case.n);
     let h = to_string_vec(&parse_poly(&case.h), case.n);
     let c = to_string_vec(&parse_poly(&case.c), case.n);
 
-    let file_stem = template_file.file_stem().unwrap().to_str().unwrap();
-    let dir = template_file.parent().unwrap();
-
-    let circom_file_path = generate(
-        template_file,
-        Some(dir.join(format!("{}_{}.circom", file_stem, case_index))),
-        case.q,
-        pk,
-    )?;
+    let circom_file_path = generate(template_file, Some(circom_file_path), case.q, pk)?;
 
     let r1cs_file_path = compile(&circom_file_path, optimization_level)?;
     let artifact_dir = r1cs_file_path.parent().unwrap();
 
     let input_json_path = artifact_dir.join(format!("input_{}.json", case_index));
 
-    println!("=== Generating input.json ===\n");
+    log_println!("=== Generating input.json ===\n");
     let mut output_map = BTreeMap::new();
     output_map.insert("s1", s1);
     output_map.insert("s2", s2);
@@ -279,7 +345,7 @@ fn run_falcon_case(
     let mut file = File::create(&input_json_path)?;
     file.write_all(json_str.as_bytes())?;
 
-    println!("Successfully wrote to {}\n", input_json_path.display());
+    log_println!("Successfully wrote to {}\n", input_json_path.display());
 
     parse(&r1cs_file_path)?;
 
@@ -289,14 +355,14 @@ fn run_falcon_case(
 }
 
 fn parse(r1cs_file_path: &Path) -> Result<()> {
-    println!("=== Parsing R1CS File ===\n ");
+    log_println!("=== Parsing R1CS File ===\n ");
     let file = File::open(r1cs_file_path).context(format!(
         "Could not open R1CS file: {}",
         r1cs_file_path.display()
     ))?;
     let reader = BufReader::new(file);
     let r1cs_file = R1CSFile::from_reader(reader).context("Failed to parse R1CS file")?;
-    println!("{}", r1cs_file);
+    log_println!("{}", r1cs_file);
     Ok(())
 }
 
@@ -307,8 +373,8 @@ fn compile(circom_file_path: &Path, optimization_level: OptimizationLevel) -> Re
 
     fs::create_dir_all(&output_dir)?;
 
-    println!("=== Compiling Circom File ===\n");
-    println!(
+    log_println!("=== Compiling Circom File ===\n");
+    log_println!(
         "Compiling {} with optimization {}... Outputting to {}",
         circom_file_path.display(),
         optimization_level,
@@ -328,11 +394,11 @@ fn compile(circom_file_path: &Path, optimization_level: OptimizationLevel) -> Re
     let elapsed_time = start_time.elapsed();
 
     if !output.status.success() {
-        eprintln!("Error during circom compilation:");
-        eprintln!("{}", String::from_utf8_lossy(&output.stderr));
+        log_eprintln!("Error during circom compilation:");
+        log_eprintln!("{}", String::from_utf8_lossy(&output.stderr));
         anyhow::bail!("Circom compilation failed");
     }
-    println!(
+    log_println!(
         "Compilation successful in {:.2?}s.\n",
         elapsed_time.as_secs()
     );
@@ -351,14 +417,14 @@ fn generate(
     q: i64,
     pk: Vec<i64>,
 ) -> Result<PathBuf> {
-    println!("=== Generating Circom File from Template ===\n");
+    log_println!("=== Generating Circom File from Template ===\n");
     let circom_file_path = if let Some(output_path) = output_path {
         output_path
     } else {
         template_file_path.with_extension("circom")
     };
     generate_circom(&circom_file_path, template_file_path, q, pk)?;
-    println!("Generated Circom file: {}\n", circom_file_path.display());
+    log_println!("Generated Circom file: {}\n", circom_file_path.display());
     Ok(circom_file_path)
 }
 
@@ -384,7 +450,7 @@ fn generate_witness(
         .join(format!("witness_{}.wtns", case_index));
     let input_json_rel_path = input_json_path.strip_prefix(dir).unwrap();
 
-    println!("=== Generating Witness ===\n");
+    log_println!("=== Generating Witness ===\n");
     let start_time = Instant::now();
     let output = Command::new("node")
         .current_dir(dir)
@@ -399,15 +465,14 @@ fn generate_witness(
     let elapsed_time = start_time.elapsed();
 
     if !output.status.success() {
-        eprintln!("Error during witness generation:");
-        eprintln!("{}", String::from_utf8_lossy(&output.stderr));
+        log_eprintln!("Error during witness generation:");
+        log_eprintln!("{}", String::from_utf8_lossy(&output.stderr));
         anyhow::bail!("Witness generation failed");
     }
-    println!(
+    log_println!(
         "Witness generation successful in {:.2?}s.\n",
         elapsed_time.as_secs()
     );
 
     Ok(())
 }
-
